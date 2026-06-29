@@ -1,0 +1,958 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VibeCodingScraper — No-Code Web Scraping & API Generator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #1e293b; }
+    ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+
+    .json-key    { color: #7dd3fc; }
+    .json-string { color: #86efac; }
+    .json-number { color: #fde68a; }
+    .json-bool   { color: #f9a8d4; }
+    .json-null   { color: #94a3b8; }
+
+    @keyframes pulse-ring {
+      0%   { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(239,68,68,0.5); }
+      70%  { transform: scale(1);   box-shadow: 0 0 0 8px rgba(239,68,68,0); }
+      100% { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(239,68,68,0); }
+    }
+    .recording-pulse { animation: pulse-ring 1.4s ease-out infinite; }
+
+    @keyframes fade-in {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .fade-in { animation: fade-in 0.3s ease-out forwards; }
+
+    /* Step tracker dots */
+    .step-done    { background: #10b981; }
+    .step-active  { background: #8b5cf6; }
+    .step-pending { background: #334155; }
+  </style>
+</head>
+
+<body class="bg-slate-900 text-slate-100 min-h-screen font-sans">
+
+  <!-- ═══ HEADER ═══════════════════════════════════════════════ -->
+  <header class="bg-slate-800 border-b border-slate-700 px-6 py-4 flex items-center justify-between sticky top-0 z-10">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 bg-violet-500 rounded-lg flex items-center justify-center text-white font-bold text-sm select-none">V</div>
+      <div>
+        <h1 class="text-lg font-bold text-white leading-tight">VibeCodingScraper</h1>
+        <p class="text-xs text-slate-400">No-Code Web Scraping &amp; API Generator</p>
+      </div>
+    </div>
+    <span class="text-xs text-slate-500">by Shadman Shadid Zim</span>
+  </header>
+
+  <!-- ═══ MAIN LAYOUT ══════════════════════════════════════════ -->
+  <main class="p-6 grid grid-cols-1 lg:grid-cols-3 gap-6 max-w-7xl mx-auto">
+
+    <!-- ── LEFT (2/3): Configuration + Results ─────────────── -->
+    <section class="lg:col-span-2 flex flex-col gap-5">
+
+      <!-- ┌─ STEP 1: MODE + INPUTS ────────────────────────── ┐ -->
+      <div class="bg-slate-800 rounded-xl border border-slate-700 p-5 flex flex-col gap-5">
+
+        <!-- Mode toggle -->
+        <div>
+          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Step 1 — Choose Mode</p>
+          <div class="inline-flex bg-slate-900 rounded-lg p-1 gap-1">
+            <button id="btnModeQuick" onclick="setMode('quick')"
+              class="text-xs px-4 py-2 rounded-md font-semibold transition-all bg-violet-600 text-white">
+              ⚡ Quick Scrape
+            </button>
+            <button id="btnModeRecord" onclick="setMode('record')"
+              class="text-xs px-4 py-2 rounded-md font-semibold transition-all text-slate-400 hover:text-slate-200">
+              ● Workflow Recorder
+            </button>
+          </div>
+          <!-- Mode description -->
+          <p id="modeDesc" class="text-xs text-slate-500 mt-2">
+            Visits a URL invisibly and extracts all text, tables, and links from the homepage.
+          </p>
+        </div>
+
+        <!-- URL input (always visible) -->
+        <div class="flex flex-col gap-1.5">
+          <label class="text-xs font-semibold text-slate-300">🌐 Website URL</label>
+          <input id="urlInput" type="url"
+            placeholder="https://www.dsebd.org/"
+            class="bg-slate-900 border border-slate-600 rounded-lg px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500" />
+        </div>
+
+        <!-- ── RECORDER-ONLY FIELDS (hidden in quick mode) ── -->
+        <div id="recorderFields" class="hidden flex flex-col gap-4 fade-in">
+
+          <!-- Search Query -->
+          <div class="flex flex-col gap-1.5">
+            <label class="text-xs font-semibold text-slate-300">🔍 Search Query</label>
+            <input id="searchQuery" type="text"
+              placeholder='e.g. "ROBI" or "GP" — what you want to look up'
+              class="bg-slate-900 border border-slate-600 rounded-lg px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500" />
+          </div>
+
+          <!-- CSS Selector with guide -->
+          <div class="flex flex-col gap-1.5">
+            <div class="flex items-center justify-between">
+              <label class="text-xs font-semibold text-slate-300">
+                🎯 Search Box CSS Selector
+                <span class="text-slate-500 font-normal">(Leave blank to Auto-Detect)</span>
+              </label>
+              <button onclick="toggleGuide()"
+                class="text-xs text-violet-400 hover:text-violet-300 underline underline-offset-2">
+                ? How to find this
+              </button>
+            </div>
+            <input id="searchSelector" type="text"
+              placeholder='Leave blank — or type  #inputText  for DSE'
+              class="bg-slate-900 border border-slate-600 rounded-lg px-4 py-2.5 text-sm text-white font-mono placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500" />
+            <!-- Smart-scan notice -->
+            <p class="text-xs text-emerald-400/80 flex items-center gap-1.5">
+              <span>✨</span>
+              <span>Smart-scan is active. Leave this blank and the engine will automatically detect the search field.</span>
+            </p>
+
+            <!-- Common presets -->
+            <div class="flex flex-wrap gap-2">
+              <span class="text-xs text-slate-500">Common:</span>
+              <!-- DSE-specific — verified by inspection -->
+              <button onclick="useSelector('#inputText')"
+                class="text-xs bg-violet-900 hover:bg-violet-700 border border-violet-600 text-violet-200 px-2 py-0.5 rounded font-mono transition-colors">
+                #inputText <span class="text-violet-400 not-italic text-[10px]">DSE ✓</span>
+              </button>
+              <button onclick="useSelector('input[type=&quot;search&quot;]')"
+                class="text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-0.5 rounded font-mono transition-colors">input[type="search"]</button>
+              <button onclick="useSelector('input[name=&quot;q&quot;]')"
+                class="text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-0.5 rounded font-mono transition-colors">input[name="q"]</button>
+              <button onclick="useSelector('#searchBox')"
+                class="text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-0.5 rounded font-mono transition-colors">#searchBox</button>
+            </div>
+
+            <!-- ── CSS SELECTOR GUIDE (collapsible) ── -->
+            <div id="selectorGuide"
+              class="hidden bg-slate-900 border border-violet-900 rounded-xl p-4 mt-1 flex flex-col gap-3 fade-in">
+              <p class="text-xs font-bold text-violet-300">How to find the CSS Selector in 4 steps:</p>
+
+              <div class="flex flex-col gap-2">
+                <!-- Step A -->
+                <div class="flex gap-3 items-start">
+                  <span class="w-5 h-5 rounded-full bg-violet-700 text-white text-xs flex items-center justify-center shrink-0 mt-0.5">1</span>
+                  <div>
+                    <p class="text-xs text-slate-200 font-semibold">Open the target website in Chrome</p>
+                    <p class="text-xs text-slate-400">Go to <span class="font-mono text-violet-300">https://www.dsebd.org/</span> in a separate Chrome tab.</p>
+                  </div>
+                </div>
+                <!-- Step B -->
+                <div class="flex gap-3 items-start">
+                  <span class="w-5 h-5 rounded-full bg-violet-700 text-white text-xs flex items-center justify-center shrink-0 mt-0.5">2</span>
+                  <div>
+                    <p class="text-xs text-slate-200 font-semibold">Right-click the search box → "Inspect"</p>
+                    <p class="text-xs text-slate-400">A panel opens at the bottom showing the HTML code for that element.</p>
+                  </div>
+                </div>
+                <!-- Step C -->
+                <div class="flex gap-3 items-start">
+                  <span class="w-5 h-5 rounded-full bg-violet-700 text-white text-xs flex items-center justify-center shrink-0 mt-0.5">3</span>
+                  <div>
+                    <p class="text-xs text-slate-200 font-semibold">Look for <code class="bg-slate-700 px-1 rounded">id=</code> or <code class="bg-slate-700 px-1 rounded">name=</code> in the blue-highlighted line</p>
+                    <p class="text-xs text-slate-400 mt-1">Examples of what you might see:</p>
+                    <div class="bg-slate-800 rounded-lg p-2 mt-1 font-mono text-xs space-y-1">
+                      <p class="text-slate-300">&lt;input <span class="text-yellow-300">id="SearchBox"</span> type="text" /&gt;</p>
+                      <p class="text-slate-300">&lt;input <span class="text-yellow-300">name="q"</span> type="search" /&gt;</p>
+                      <p class="text-slate-300">&lt;input <span class="text-yellow-300">type="text"</span> class="search-input" /&gt;</p>
+                    </div>
+                  </div>
+                </div>
+                <!-- Step D -->
+                <div class="flex gap-3 items-start">
+                  <span class="w-5 h-5 rounded-full bg-violet-700 text-white text-xs flex items-center justify-center shrink-0 mt-0.5">4</span>
+                  <div>
+                    <p class="text-xs text-slate-200 font-semibold">Translate what you saw into a selector:</p>
+                    <div class="bg-slate-800 rounded-lg p-2 mt-1 font-mono text-xs space-y-1">
+                      <p><span class="text-slate-400">id="SearchBox"</span> <span class="text-slate-500">→</span> <span class="text-emerald-300">#SearchBox</span></p>
+                      <p><span class="text-slate-400">name="q"</span> <span class="text-slate-500">→</span> <span class="text-emerald-300">input[name="q"]</span></p>
+                      <p><span class="text-slate-400">type="text" (no id/name)</span> <span class="text-slate-500">→</span> <span class="text-emerald-300">input[type="text"]</span></p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <p class="text-xs text-slate-500 border-t border-slate-700 pt-2">
+                💡 <strong class="text-slate-400">Confirmed for DSE (dsebd.org):</strong>
+                Use <span class="font-mono text-violet-300">#inputText</span> — we inspected the page and that is the exact <code class="bg-slate-700 px-1 rounded">id=</code> of their company search box.
+              </p>
+            </div>
+            <!-- ── END CSS GUIDE ── -->
+
+          </div>
+        </div>
+        <!-- ── END RECORDER FIELDS ── -->
+
+        <!-- Action button -->
+        <div class="flex flex-col gap-2">
+          <button id="actionBtn" onclick="startAction()"
+            class="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-white text-sm font-bold py-3 rounded-lg transition-colors flex items-center justify-center gap-2">
+            <span id="actionBtnIcon">⚡</span>
+            <span id="actionBtnText">Scrape Website</span>
+          </button>
+
+          <!-- Recorder-only notice (hidden in quick mode) -->
+          <div id="recorderNotice" class="hidden flex items-center gap-2 bg-amber-900/30 border border-amber-700 rounded-lg px-3 py-2">
+            <span class="text-amber-400 text-sm">👁</span>
+            <p class="text-xs text-amber-300">
+              A real browser window will appear on your screen. Watch the robot navigate, find the search box, and type your query live.
+            </p>
+          </div>
+        </div>
+
+        <!-- ── LIVE STATUS TRACKER (visible while running) ── -->
+        <div id="statusTracker" class="hidden flex flex-col gap-3">
+          <div class="w-full h-px bg-slate-700"></div>
+          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Live Status</p>
+          <div id="stepList" class="flex flex-col gap-2"></div>
+        </div>
+
+      </div>
+      <!-- └────────────────────────────────────────────────── ┘ -->
+
+
+      <!-- ┌─ STEP 2: RESULTS ──────────────────────────────── ┐ -->
+      <div id="resultsCard" class="hidden bg-slate-800 rounded-xl border border-slate-700 p-5 flex flex-col gap-5 fade-in">
+
+        <!-- Result header -->
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Step 2 — Review Extracted Data</p>
+            <p id="resultUrl" class="text-xs text-slate-500 mt-0.5 break-all"></p>
+            <!-- Search badge (only shown for recorder results) -->
+            <div id="searchBadge" class="hidden mt-2 inline-flex items-center gap-1.5 bg-violet-900/50 border border-violet-700 rounded-full px-3 py-1">
+              <span class="text-violet-400 text-xs">🔍</span>
+              <span id="searchBadgeText" class="text-xs text-violet-200 font-medium"></span>
+            </div>
+          </div>
+          <span class="shrink-0 text-xs bg-emerald-900 text-emerald-300 px-2 py-1 rounded-full">✓ Success</span>
+        </div>
+
+        <!-- Summary stat tiles -->
+        <div id="summaryTiles" class="grid grid-cols-4 gap-3 text-center"></div>
+
+        <!-- Tabs -->
+        <div class="flex gap-1 border-b border-slate-700">
+          <button onclick="showTab('page')"  id="tab-page"  class="tab-btn text-xs px-3 py-2 border-b-2 border-violet-500 text-violet-400 font-semibold -mb-px">Page Content</button>
+          <button onclick="showTab('api')"   id="tab-api"   class="tab-btn text-xs px-3 py-2 border-b-2 border-transparent text-slate-400 hover:text-slate-200 -mb-px">API Calls</button>
+          <button onclick="showTab('raw')"   id="tab-raw"   class="tab-btn text-xs px-3 py-2 border-b-2 border-transparent text-slate-400 hover:text-slate-200 -mb-px">Raw JSON</button>
+        </div>
+
+        <div id="pane-page" class="tab-pane"><div id="pageContentView"></div></div>
+
+        <div id="pane-api" class="tab-pane hidden flex flex-col gap-3">
+          <p id="apiTabDesc" class="text-xs text-slate-400">
+            These are the <strong class="text-slate-200">hidden API calls</strong> the website made.
+          </p>
+          <div id="apiCallsView"></div>
+        </div>
+
+        <div id="pane-raw" class="tab-pane hidden">
+          <pre id="rawJsonView" class="bg-slate-900 rounded-lg p-4 text-xs overflow-auto max-h-96 leading-relaxed"></pre>
+        </div>
+
+        <!-- Save as workflow -->
+        <div class="border-t border-slate-700 pt-4 flex flex-col gap-2">
+          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Step 3 — Save as Replayable Workflow / API</p>
+          <div class="flex gap-3">
+            <input id="workflowName" type="text"
+              placeholder='Name this workflow, e.g. "DSE — ROBI Stock Lookup"'
+              class="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+            <button onclick="saveWorkflow()"
+              class="bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold px-5 py-2.5 rounded-lg transition-colors whitespace-nowrap">
+              Save Workflow
+            </button>
+          </div>
+        </div>
+
+      </div>
+      <!-- └────────────────────────────────────────────────── ┘ -->
+
+      <!-- Error card -->
+      <div id="errorCard" class="hidden bg-red-900/30 border border-red-700 rounded-xl p-5 fade-in">
+        <p class="text-sm text-red-300 font-semibold">Action failed</p>
+        <p id="errorMsg" class="text-xs text-red-400 mt-1 leading-relaxed"></p>
+      </div>
+
+    </section>
+
+    <!-- ── RIGHT (1/3): Saved Workflows ─────────────────────── -->
+    <section class="bg-slate-800 rounded-xl border border-slate-700 p-5 flex flex-col gap-4 h-fit lg:sticky lg:top-24">
+      <div>
+        <h2 class="text-sm font-semibold text-slate-300 uppercase tracking-wider">Saved Workflows</h2>
+        <p class="text-xs text-slate-500 mt-1">Each saved workflow is a replayable API. Hit Run to fetch fresh data from the same search.</p>
+      </div>
+      <div id="workflowList" class="flex flex-col gap-3">
+        <p class="text-xs text-slate-500 italic">No workflows saved yet.</p>
+      </div>
+    </section>
+
+  </main>
+
+
+  <!-- ═══ JAVASCRIPT ════════════════════════════════════════════
+       Think of this as the dashboard's brain — it decides what
+       to show, what to send to the server, and what to do with
+       the results that come back.
+  ════════════════════════════════════════════════════════════ -->
+  <script>
+
+    // ── App state ──────────────────────────────────────────────
+    let currentMode = "quick";   // "quick" or "record"
+    let currentData = null;      // last successful scrape/recording result
+    let stepTimer   = null;      // interval for cycling status steps
+
+    // ── MODE SWITCHER ──────────────────────────────────────────
+    function setMode(mode) {
+      currentMode = mode;
+
+      const isRecord = mode === "record";
+
+      // Toggle button styles
+      document.getElementById("btnModeQuick").className  =
+        `text-xs px-4 py-2 rounded-md font-semibold transition-all ${!isRecord ? "bg-violet-600 text-white" : "text-slate-400 hover:text-slate-200"}`;
+      document.getElementById("btnModeRecord").className =
+        `text-xs px-4 py-2 rounded-md font-semibold transition-all ${isRecord  ? "bg-red-600 text-white"    : "text-slate-400 hover:text-slate-200"}`;
+
+      // Show / hide extra fields
+      document.getElementById("recorderFields").classList.toggle("hidden", !isRecord);
+      document.getElementById("recorderNotice").classList.toggle("hidden", !isRecord);
+
+      // Update description, button icon/text
+      document.getElementById("modeDesc").textContent = isRecord
+        ? "Opens a visible browser window on your screen. Watch the robot navigate to the site, locate the search box, type your query character by character, and capture the live results."
+        : "Visits a URL invisibly and extracts all text, tables, and links from the homepage.";
+
+      document.getElementById("actionBtnIcon").textContent = isRecord ? "●" : "⚡";
+      document.getElementById("actionBtnText").textContent = isRecord ? "Record Workflow" : "Scrape Website";
+
+      document.getElementById("actionBtn").className =
+        `w-full ${isRecord ? "bg-red-600 hover:bg-red-500" : "bg-violet-600 hover:bg-violet-500"} disabled:opacity-40 text-white text-sm font-bold py-3 rounded-lg transition-colors flex items-center justify-center gap-2`;
+    }
+
+    // ── SELECTOR GUIDE TOGGLE ──────────────────────────────────
+    function toggleGuide() {
+      document.getElementById("selectorGuide").classList.toggle("hidden");
+    }
+
+    // ── PRESET SELECTOR CHIPS ──────────────────────────────────
+    function useSelector(value) {
+      document.getElementById("searchSelector").value = value;
+    }
+
+    // ── MAIN ACTION ────────────────────────────────────────────
+    async function startAction() {
+      const url = document.getElementById("urlInput").value.trim();
+      if (!url.startsWith("http")) { alert("Please enter a full URL starting with https://"); return; }
+
+      const isRecord = currentMode === "record";
+
+      let searchQuery    = null;
+      let searchSelector = null;
+
+      if (isRecord) {
+        searchQuery    = document.getElementById("searchQuery").value.trim();
+        searchSelector = document.getElementById("searchSelector").value.trim() || null;
+        if (!searchQuery) { alert("Please enter a Search Query."); return; }
+        // searchSelector is now optional — blank means auto-detect runs on the server
+      }
+
+      // UI: disable button, show tracker, hide old results
+      setRunning(true);
+      hideCards();
+      startStepTracker(isRecord, searchQuery);
+
+      try {
+        const response = await fetch("/api/scrape", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ url, searchQuery, searchSelector })
+        });
+
+        const json = await response.json();
+        if (!response.ok) throw new Error(json.error || "Unknown server error");
+
+        currentData = json.data;
+        renderResults(currentData);
+
+      } catch (err) {
+        showError(err.message);
+      } finally {
+        setRunning(false);
+        stopStepTracker();
+      }
+    }
+
+    // ── LIVE STEP TRACKER ──────────────────────────────────────
+    // Cycles through status messages so the user sees progress
+    // while the server is working (each step ≈ 3–4 seconds).
+    function startStepTracker(isRecord, query) {
+      const steps = isRecord
+        ? [
+            "Launching visible browser window on your screen...",
+            `Navigating to the website — page is loading...`,
+            `Page loaded. Locating the search box...`,
+            `Found the search box! Typing "${query}" one character at a time...`,
+            "Pressing Enter — waiting for search results to load...",
+            "Intercepting JSON API calls triggered by the search...",
+            "Extracting content from the results page...",
+            "Packaging results — almost done..."
+          ]
+        : [
+            "Launching headless browser (invisible)...",
+            "Navigating to the website...",
+            "Page loaded. Intercepting network traffic...",
+            "Extracting headings, tables, links, and paragraphs...",
+            "Packaging results..."
+          ];
+
+      let index = 0;
+
+      const tracker = document.getElementById("statusTracker");
+      const list    = document.getElementById("stepList");
+      tracker.classList.remove("hidden");
+
+      function renderSteps() {
+        list.innerHTML = steps.map((s, i) => {
+          let dotClass   = "step-pending";
+          let textClass  = "text-slate-500";
+          let icon       = "";
+          if (i < index)  { dotClass = "step-done";   textClass = "text-slate-400"; icon = "✓ "; }
+          if (i === index){ dotClass = "step-active";  textClass = "text-slate-100"; icon = ""; }
+          return `
+            <div class="flex items-center gap-2.5">
+              <div class="w-2.5 h-2.5 rounded-full shrink-0 ${dotClass} ${i === index ? "recording-pulse" : ""}"></div>
+              <p class="text-xs ${textClass}">${icon}${esc(s)}</p>
+            </div>`;
+        }).join("");
+      }
+
+      renderSteps();
+      stepTimer = setInterval(() => {
+        if (index < steps.length - 1) { index++; renderSteps(); }
+      }, isRecord ? 3500 : 2500);
+    }
+
+    function stopStepTracker() {
+      clearInterval(stepTimer);
+      document.getElementById("statusTracker").classList.add("hidden");
+    }
+
+    // ── RENDER RESULTS ─────────────────────────────────────────
+    function renderResults(data) {
+      const pc = data.pageContent;
+
+      // URL + search badge
+      document.getElementById("resultUrl").textContent = data.url;
+      if (data.searchQuery) {
+        document.getElementById("searchBadge").classList.remove("hidden");
+        const autoTag = data.autoDetected ? ` · auto-detected: ${esc(data.searchSelector)}` : "";
+        document.getElementById("searchBadgeText").textContent = `Search: "${data.searchQuery}"${autoTag}`;
+        document.getElementById("apiTabDesc").innerHTML =
+          `These are the <strong class="text-slate-200">JSON API calls triggered strictly by the "${esc(data.searchQuery)}" search</strong> — captured after Enter was pressed, not during page load.`;
+      } else {
+        document.getElementById("searchBadge").classList.add("hidden");
+        document.getElementById("apiTabDesc").innerHTML =
+          `These are the <strong class="text-slate-200">hidden API calls</strong> the website made while loading.`;
+      }
+
+      // Stat tiles
+      document.getElementById("summaryTiles").innerHTML = [
+        tile(pc.headings.length,                 "Headings"),
+        tile(pc.paragraphs.length,               "Paragraphs"),
+        tile(pc.links.length,                    "Links"),
+        tile(pc.tables.length + " tables / " + (data.interceptedApiCalls || []).length + " API", "Tables / API"),
+      ].join("");
+
+      // Page Content
+      let pageHtml = "";
+      if (pc.title)
+        pageHtml += section("Page Title", `<p class="text-sm text-white">${esc(pc.title)}</p>`);
+
+      if (pc.headings.length)
+        pageHtml += section("Headings",
+          pc.headings.map(h =>
+            `<div class="flex gap-2 py-0.5">
+               <span class="text-xs text-violet-400 w-7 shrink-0">${esc(h.level)}</span>
+               <span class="text-xs text-slate-300">${esc(h.text)}</span>
+             </div>`
+          ).join(""));
+
+      if (pc.tables.length) {
+        pc.tables.forEach((t, i) => {
+          if (!t.headers.length && !t.rows.length) return;
+          let th = `<div class="overflow-x-auto"><table class="text-xs w-full border-collapse">`;
+          if (t.headers.length)
+            th += `<thead><tr>${t.headers.map(h => `<th class="border border-slate-600 px-2 py-1 bg-slate-700 text-slate-200 text-left">${esc(h)}</th>`).join("")}</tr></thead>`;
+          th += `<tbody>${t.rows.slice(0, 15).map(r =>
+            `<tr>${r.map(c => `<td class="border border-slate-700 px-2 py-1 text-slate-300">${esc(c)}</td>`).join("")}</tr>`
+          ).join("")}</tbody></table></div>`;
+          pageHtml += section(`Table ${i + 1}`, th);
+        });
+      }
+
+      if (pc.paragraphs.length)
+        pageHtml += section("Paragraphs",
+          pc.paragraphs.map(p => `<p class="text-xs text-slate-300 mb-2">${esc(p)}</p>`).join(""));
+
+      if (pc.links.length)
+        pageHtml += section("Links",
+          pc.links.map(l =>
+            `<div class="flex gap-2 items-start py-0.5">
+               <span class="text-violet-400 text-xs shrink-0 mt-0.5">→</span>
+               <a href="${esc(l.href)}" target="_blank"
+                  class="text-xs text-slate-300 hover:text-violet-300 break-all">${esc(l.text)}</a>
+             </div>`
+          ).join(""));
+
+      document.getElementById("pageContentView").innerHTML =
+        pageHtml || `<p class="text-xs text-slate-400">No structured content found on this page.</p>`;
+
+      // API Calls
+      const calls = data.interceptedApiCalls || [];
+      document.getElementById("apiCallsView").innerHTML = calls.length
+        ? calls.map(c =>
+            `<div class="mb-4">
+               <p class="text-xs text-violet-300 font-mono mb-1 break-all">📡 ${esc(c.endpoint)}</p>
+               <pre class="bg-slate-900 rounded-lg p-3 text-xs overflow-auto max-h-48 leading-relaxed">${syntaxHighlight(JSON.stringify(c.data, null, 2))}</pre>
+             </div>`).join("")
+        : `<p class="text-xs text-slate-400">
+             No JSON API calls intercepted.
+             ${data.searchQuery
+               ? "DSE may be returning results as HTML rather than a hidden JSON API — check the Page Content tab for tables."
+               : "This page delivers its data directly in HTML (old-style site)."}
+           </p>`;
+
+      // Raw JSON
+      document.getElementById("rawJsonView").innerHTML =
+        syntaxHighlight(JSON.stringify(data, null, 2));
+
+      document.getElementById("resultsCard").classList.remove("hidden");
+      showTab("page");
+    }
+
+    // ── SAVE WORKFLOW ──────────────────────────────────────────
+    async function saveWorkflow() {
+      const name = document.getElementById("workflowName").value.trim();
+      if (!name)        { alert("Please give your workflow a name first."); return; }
+      if (!currentData) { alert("Nothing to save yet — run a scrape or recording first."); return; }
+
+      const res = await fetch("/api/workflows", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          url:            currentData.url,
+          searchQuery:    currentData.searchQuery    || null,
+          searchSelector: currentData.searchSelector || null,
+          data:           currentData
+        })
+      });
+
+      if (res.ok) {
+        document.getElementById("workflowName").value = "";
+        loadWorkflows();
+      }
+    }
+
+    // ── LOAD WORKFLOWS ─────────────────────────────────────────
+    async function loadWorkflows() {
+      const res  = await fetch("/api/workflows");
+      const list = await res.json();
+      const box  = document.getElementById("workflowList");
+
+      if (!list.length) {
+        box.innerHTML = `<p class="text-xs text-slate-500 italic">No workflows saved yet.</p>`;
+        return;
+      }
+
+      box.innerHTML = list.map(w => `
+        <div class="bg-slate-900 rounded-lg p-3 border border-slate-700">
+          <p class="text-sm text-white font-medium truncate">${esc(w.name)}</p>
+          <p class="text-xs text-slate-500 truncate mt-0.5">${esc(w.url)}</p>
+          ${w.searchQuery
+            ? `<span class="inline-flex items-center gap-1 mt-1 text-xs bg-violet-900/50 text-violet-300 border border-violet-800 rounded-full px-2 py-0.5">🔍 ${esc(w.searchQuery)}</span>`
+            : ""}
+          <p class="text-xs text-slate-600 mt-1">${new Date(w.createdAt).toLocaleDateString()}</p>
+          <div class="flex gap-2 mt-2">
+            <button onclick="runWorkflow('${w.id}')"
+              class="flex-1 ${w.searchQuery ? "bg-red-700 hover:bg-red-600" : "bg-violet-700 hover:bg-violet-600"} text-white text-xs py-1.5 rounded transition-colors">
+              ${w.searchQuery ? "● Re-record" : "▶ Run Again"}
+            </button>
+            <button onclick="deleteWorkflow('${w.id}')"
+              class="bg-slate-700 hover:bg-red-700 text-slate-300 text-xs px-2.5 py-1.5 rounded transition-colors">
+              ✕
+            </button>
+          </div>
+          ${w.searchSelector ? `
+          <button onclick="openApiModal('${w.id}', '${esc(w.name)}')"
+            class="w-full mt-2 bg-emerald-900/50 hover:bg-emerald-800/70 border border-emerald-700 text-emerald-300 text-xs py-1.5 rounded transition-colors font-semibold">
+            🔗 Live API Endpoint
+          </button>` : ""}
+        </div>`
+      ).join("");
+    }
+
+    // ── RUN WORKFLOW ───────────────────────────────────────────
+    async function runWorkflow(id) {
+      const list = await (await fetch("/api/workflows")).json();
+      const wf   = list.find(w => w.id === id);
+      setRunning(true);
+      hideCards();
+      startStepTracker(Boolean(wf?.searchQuery), wf?.searchQuery);
+
+      try {
+        const res  = await fetch(`/api/workflows/${id}/run`, { method: "POST" });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error);
+        currentData = json.data;
+        renderResults(currentData);
+      } catch (err) {
+        showError(err.message);
+      } finally {
+        setRunning(false);
+        stopStepTracker();
+      }
+    }
+
+    // ── DELETE WORKFLOW ────────────────────────────────────────
+    async function deleteWorkflow(id) {
+      if (!confirm("Delete this workflow?")) return;
+      await fetch(`/api/workflows/${id}`, { method: "DELETE" });
+      loadWorkflows();
+    }
+
+    // ── TAB SWITCHER ───────────────────────────────────────────
+    function showTab(name) {
+      document.querySelectorAll(".tab-pane").forEach(p => p.classList.add("hidden"));
+      document.querySelectorAll(".tab-btn").forEach(b => {
+        b.classList.remove("border-violet-500", "text-violet-400", "font-semibold");
+        b.classList.add("border-transparent", "text-slate-400");
+      });
+      document.getElementById(`pane-${name}`).classList.remove("hidden");
+      const btn = document.getElementById(`tab-${name}`);
+      btn.classList.add("border-violet-500", "text-violet-400", "font-semibold");
+      btn.classList.remove("border-transparent", "text-slate-400");
+    }
+
+    // ── UI HELPERS ─────────────────────────────────────────────
+    function tile(val, label) {
+      return `<div class="bg-slate-900 rounded-lg p-3 text-center">
+                <p class="text-lg font-bold text-violet-400 leading-tight">${val}</p>
+                <p class="text-xs text-slate-400 mt-0.5">${label}</p>
+              </div>`;
+    }
+
+    function section(title, body) {
+      return `<div class="bg-slate-900 rounded-lg p-3 mb-2">
+                <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">${title}</p>
+                ${body}
+              </div>`;
+    }
+
+    function esc(s) {
+      return String(s ?? "")
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+
+    function syntaxHighlight(json) {
+      return esc(json).replace(
+        /("(\\u[\dA-Fa-f]{4}|\\[^u]|[^\\"])*"(\s*:)?|-?\d+\.?\d*([eE][+-]?\d+)?|true|false|null)/g,
+        (m) => {
+          let cls = "json-number";
+          if (/^"/.test(m))           cls = /:$/.test(m) ? "json-key" : "json-string";
+          else if (/true|false/.test(m)) cls = "json-bool";
+          else if (/null/.test(m))       cls = "json-null";
+          return `<span class="${cls}">${m}</span>`;
+        }
+      );
+    }
+
+    function setRunning(on) {
+      const btn  = document.getElementById("actionBtn");
+      const icon = document.getElementById("actionBtnIcon");
+      const txt  = document.getElementById("actionBtnText");
+      btn.disabled = on;
+      if (on) { icon.textContent = "⏳"; txt.textContent = "Working — please wait..."; }
+      else    { setMode(currentMode); } // restore correct button text/colour
+    }
+
+    function hideCards() {
+      document.getElementById("resultsCard").classList.add("hidden");
+      document.getElementById("errorCard").classList.add("hidden");
+    }
+
+    function showError(msg) {
+      document.getElementById("errorCard").classList.remove("hidden");
+      document.getElementById("errorMsg").textContent = msg;
+    }
+
+    // ── INIT ───────────────────────────────────────────────────
+    window.onload = loadWorkflows;
+
+    // Enter key support in URL and query fields
+    ["urlInput", "searchQuery", "searchSelector"].forEach(id => {
+      document.getElementById(id)?.addEventListener("keydown", e => {
+        if (e.key === "Enter") startAction();
+      });
+    });
+
+  </script>
+
+  <!-- ═══ LIVE API MODAL ═══════════════════════════════════════
+       Appears when user clicks "🔗 Live API Endpoint" on a workflow card.
+       Shows the callable URL, lets the user test it with any query,
+       and displays the JSON response with syntax highlighting.
+  ════════════════════════════════════════════════════════════ -->
+  <div id="apiModal"
+    class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+    onclick="if(event.target===this) closeApiModal()">
+
+    <div class="bg-slate-800 border border-slate-600 rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl fade-in">
+
+      <!-- Modal header -->
+      <div class="flex items-center justify-between px-5 py-4 border-b border-slate-700">
+        <div>
+          <h2 class="text-base font-bold text-white">🔗 Live API Endpoint</h2>
+          <p id="modalWorkflowName" class="text-xs text-slate-400 mt-0.5"></p>
+        </div>
+        <button onclick="closeApiModal()"
+          class="text-slate-400 hover:text-white text-xl leading-none w-8 h-8 flex items-center justify-center rounded-lg hover:bg-slate-700 transition-colors">
+          ✕
+        </button>
+      </div>
+
+      <!-- Modal body (scrollable) -->
+      <div class="overflow-y-auto p-5 flex flex-col gap-5">
+
+        <!-- Explanation -->
+        <div class="bg-slate-900 rounded-xl p-4 border border-slate-700">
+          <p class="text-xs text-slate-300 leading-relaxed">
+            This is your dynamic, callable API. Any time you (or another app) fetches this URL,
+            a headless robot browser opens in the background, types your query into the search box,
+            waits for the autocomplete dropdown to appear, and returns the results as JSON —
+            all within a few seconds.
+          </p>
+          <p class="text-xs text-slate-500 mt-2">
+            Change the <span class="font-mono text-emerald-400">?q=</span> value to change what you're searching for.
+          </p>
+        </div>
+
+        <!-- URL display + copy -->
+        <div class="flex flex-col gap-2">
+          <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider">Your Live API URL</label>
+          <div class="flex gap-2">
+            <code id="modalApiUrl"
+              class="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2.5 text-xs text-emerald-300 font-mono break-all leading-relaxed">
+            </code>
+            <button onclick="copyApiUrl()"
+              id="copyBtn"
+              class="shrink-0 bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs px-3 py-2 rounded-lg transition-colors font-semibold">
+              Copy
+            </button>
+          </div>
+          <p class="text-xs text-slate-500">
+            💡 Paste this URL directly into your browser, Postman, Excel Power Query, or Python requests.
+          </p>
+        </div>
+
+        <!-- Live tester -->
+        <div class="flex flex-col gap-3">
+          <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider">Test Live Query</label>
+          <div class="flex gap-2">
+            <div class="flex items-center bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 flex-1 gap-1 font-mono text-xs">
+              <span class="text-slate-500 shrink-0">?q=</span>
+              <input id="liveQueryInput" type="text" value="R"
+                placeholder="ROBI"
+                class="flex-1 bg-transparent text-white outline-none placeholder-slate-500" />
+            </div>
+            <button onclick="testLiveQuery()" id="testBtn"
+              class="shrink-0 bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-4 py-2 rounded-lg transition-colors font-bold disabled:opacity-40">
+              ▶ Run Query
+            </button>
+          </div>
+        </div>
+
+        <!-- Response viewer (hidden until a test is run) -->
+        <div id="liveResponseArea" class="hidden flex flex-col gap-3">
+
+          <!-- Summary bar -->
+          <div id="liveResponseSummary"
+            class="flex items-center gap-3 bg-slate-900 rounded-lg px-3 py-2 border border-slate-700">
+          </div>
+
+          <!-- Dropdown items table -->
+          <div id="liveDropdownSection" class="hidden flex flex-col gap-2">
+            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Autocomplete Dropdown Items</p>
+            <div id="liveDropdownTable" class="overflow-x-auto"></div>
+          </div>
+
+          <!-- API calls -->
+          <div id="liveApiSection" class="hidden flex flex-col gap-2">
+            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Intercepted Network API Calls</p>
+            <div id="liveApiCallsView"></div>
+          </div>
+
+          <!-- Raw JSON toggle -->
+          <details class="group">
+            <summary class="text-xs text-slate-400 hover:text-slate-200 cursor-pointer select-none py-1">
+              ▶ Show full raw JSON response
+            </summary>
+            <pre id="liveRawJson"
+              class="mt-2 bg-slate-900 rounded-lg p-3 text-xs overflow-auto max-h-64 leading-relaxed border border-slate-700"></pre>
+          </details>
+        </div>
+
+        <!-- Error display -->
+        <div id="liveErrorArea" class="hidden bg-red-900/30 border border-red-700 rounded-lg p-3">
+          <p class="text-xs text-red-300 font-semibold">Query failed</p>
+          <p id="liveErrorMsg" class="text-xs text-red-400 mt-1"></p>
+        </div>
+
+      </div>
+    </div>
+  </div>
+  <!-- ═══ END MODAL ════════════════════════════════════════════ -->
+
+  <script>
+    // ── Modal state ────────────────────────────────────────────
+    let activeWorkflowId = null;
+
+    // ── OPEN MODAL ─────────────────────────────────────────────
+    function openApiModal(workflowId, workflowName) {
+      activeWorkflowId = workflowId;
+      const url = `${location.origin}/api/live/${workflowId}?q=ROBI`;
+
+      document.getElementById("modalWorkflowName").textContent = workflowName;
+      document.getElementById("modalApiUrl").textContent = url;
+      document.getElementById("liveQueryInput").value = "R";
+      document.getElementById("liveResponseArea").classList.add("hidden");
+      document.getElementById("liveErrorArea").classList.add("hidden");
+      document.getElementById("apiModal").classList.remove("hidden");
+      document.body.style.overflow = "hidden"; // prevent background scroll
+    }
+
+    function closeApiModal() {
+      document.getElementById("apiModal").classList.add("hidden");
+      document.body.style.overflow = "";
+      activeWorkflowId = null;
+    }
+
+    // ── COPY URL ───────────────────────────────────────────────
+    function copyApiUrl() {
+      const url = document.getElementById("modalApiUrl").textContent.trim();
+      navigator.clipboard.writeText(url).then(() => {
+        const btn = document.getElementById("copyBtn");
+        btn.textContent = "Copied ✓";
+        btn.classList.add("bg-emerald-700");
+        setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("bg-emerald-700"); }, 2000);
+      });
+    }
+
+    // ── TEST LIVE QUERY ────────────────────────────────────────
+    // Calls /api/live/:id?q=<term> and renders the result.
+    async function testLiveQuery() {
+      const q   = document.getElementById("liveQueryInput").value.trim();
+      const btn = document.getElementById("testBtn");
+      if (!q || !activeWorkflowId) return;
+
+      // Update the URL display live as the query changes
+      document.getElementById("modalApiUrl").textContent =
+        `${location.origin}/api/live/${activeWorkflowId}?q=${encodeURIComponent(q)}`;
+
+      // Loading state
+      btn.disabled = true;
+      btn.textContent = "⏳ Running...";
+      document.getElementById("liveResponseArea").classList.add("hidden");
+      document.getElementById("liveErrorArea").classList.add("hidden");
+
+      try {
+        const res  = await fetch(`/api/live/${activeWorkflowId}?q=${encodeURIComponent(q)}`);
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "Unknown error");
+        renderLiveResponse(json);
+      } catch (err) {
+        document.getElementById("liveErrorArea").classList.remove("hidden");
+        document.getElementById("liveErrorMsg").textContent = err.message;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "▶ Run Query";
+      }
+    }
+
+    // ── RENDER LIVE RESPONSE ───────────────────────────────────
+    function renderLiveResponse(data) {
+      const dropdownItems = data.dropdownItems?.items || [];
+      const apiCalls      = data.capturedApiCalls  || [];
+      const total         = dropdownItems.length + apiCalls.length;
+
+      // Summary bar
+      document.getElementById("liveResponseSummary").innerHTML =
+        `<span class="text-xs text-emerald-400 font-bold">✓ ${total} result${total !== 1 ? "s" : ""} found</span>
+         <span class="text-xs text-slate-500">for query: "<span class="text-white font-semibold">${esc(data.query)}</span>"</span>
+         ${data.dropdownItems?.foundVia
+           ? `<span class="text-xs text-slate-600 ml-auto font-mono truncate">via ${esc(data.dropdownItems.foundVia)}</span>`
+           : ""}`;
+
+      // Dropdown items as a clean table
+      const dropdownSec = document.getElementById("liveDropdownSection");
+      if (dropdownItems.length) {
+        dropdownSec.classList.remove("hidden");
+        const rows = dropdownItems.map((it, i) =>
+          `<tr class="${i % 2 === 0 ? "bg-slate-900" : "bg-slate-800/50"}">
+             <td class="px-3 py-1.5 text-xs text-slate-300 font-medium">${esc(it.text)}</td>
+             <td class="px-3 py-1.5 text-xs text-slate-500 font-mono">${it.value ? esc(it.value) : "—"}</td>
+           </tr>`
+        ).join("");
+        document.getElementById("liveDropdownTable").innerHTML =
+          `<table class="w-full border-collapse text-xs">
+             <thead><tr>
+               <th class="px-3 py-1.5 text-left text-slate-400 bg-slate-700 text-xs font-semibold">Result Text</th>
+               <th class="px-3 py-1.5 text-left text-slate-400 bg-slate-700 text-xs font-semibold">Value / ID</th>
+             </tr></thead>
+             <tbody>${rows}</tbody>
+           </table>`;
+      } else {
+        dropdownSec.classList.add("hidden");
+      }
+
+      // Intercepted API calls
+      const apiSec = document.getElementById("liveApiSection");
+      if (apiCalls.length) {
+        apiSec.classList.remove("hidden");
+        document.getElementById("liveApiCallsView").innerHTML = apiCalls.map(c =>
+          `<div class="mb-3">
+             <p class="text-xs text-violet-300 font-mono break-all mb-1">📡 ${esc(c.endpoint)}</p>
+             <pre class="bg-slate-900 rounded-lg p-2 text-xs overflow-auto max-h-40 border border-slate-700">${syntaxHighlight(JSON.stringify(c.data, null, 2))}</pre>
+           </div>`
+        ).join("");
+      } else {
+        apiSec.classList.add("hidden");
+      }
+
+      // Raw JSON
+      document.getElementById("liveRawJson").innerHTML =
+        syntaxHighlight(JSON.stringify(data, null, 2));
+
+      document.getElementById("liveResponseArea").classList.remove("hidden");
+    }
+
+    // Allow pressing Enter in the live query input to trigger the test
+    document.getElementById("liveQueryInput")
+      .addEventListener("keydown", e => { if (e.key === "Enter") testLiveQuery(); });
+
+  </script>
+</body>
+</html>
