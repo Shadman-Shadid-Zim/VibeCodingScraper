@@ -14,6 +14,21 @@ puppeteer.use(StealthPlugin());
 const { v4: uuidv4 } = require('uuid');
 const path           = require('path');
 const cors           = require('cors');
+const Anthropic      = require('@anthropic-ai/sdk');
+
+const ai = process.env.ANTHROPIC_API_KEY
+  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+  : null;
+
+async function askClaude(prompt, maxTokens = 600) {
+  if (!ai) throw new Error('ANTHROPIC_API_KEY not set in .env');
+  const r = await ai.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: maxTokens,
+    messages: [{ role: 'user', content: prompt }],
+  });
+  return r.content[0].text.trim();
+}
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -616,45 +631,71 @@ app.post('/api/workflows/:id/call', requireAuth, checkUsageLimit, async (req, re
 });
 
 async function replayWorkflow(steps, inputs) {
-  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
-  const page    = await browser.newPage();
-  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+  });
+  const page = await browser.newPage();
+  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36');
+
+  // Block images/fonts/media to make pages load faster
+  await page.setRequestInterception(true);
+  page.on('request', req => {
+    if (['image','font','media','stylesheet'].includes(req.resourceType())) req.abort();
+    else req.continue();
+  });
 
   try {
     for (const step of steps) {
       if (step.type === 'navigate') {
-        await page.goto(step.url, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
-        await new Promise(r => setTimeout(r, 1500));
+        await page.goto(step.url, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+        await new Promise(r => setTimeout(r, 400));
       } else if (step.type === 'click') {
-        await page.waitForSelector(step.selector, { timeout: 4000 }).catch(() => {});
+        await page.waitForSelector(step.selector, { timeout: 3000 }).catch(() => {});
         await page.click(step.selector).catch(() => {});
-        await new Promise(r => setTimeout(r, 700));
+        // Wait for potential navigation or AJAX
+        await Promise.race([
+          page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 4000 }).catch(() => {}),
+          new Promise(r => setTimeout(r, 250)),
+        ]);
       } else if (step.type === 'fill') {
         let value = step.value;
         if (step.isVariable && step.variableName && inputs[step.variableName] !== undefined) {
           value = inputs[step.variableName];
         }
-        await page.waitForSelector(step.selector, { timeout: 4000 }).catch(() => {});
+        await page.waitForSelector(step.selector, { timeout: 3000 }).catch(() => {});
         await page.click(step.selector, { clickCount: 3 }).catch(() => {});
-        await page.type(step.selector, String(value), { delay: 60 }).catch(() => {});
-        await new Promise(r => setTimeout(r, 400));
+        // Clear first then type
+        await page.evaluate(sel => { const el = document.querySelector(sel); if(el) el.value=''; }, step.selector).catch(() => {});
+        await page.type(step.selector, String(value), { delay: 40 }).catch(() => {});
+        await new Promise(r => setTimeout(r, 120));
       }
     }
-    await new Promise(r => setTimeout(r, 2000));
+    // Final wait for results to render
+    await new Promise(r => setTimeout(r, 1500));
 
-    const data = await page.evaluate(() => ({
-      title: document.title,
-      url:   window.location.href,
-      headings: Array.from(document.querySelectorAll('h1,h2,h3')).slice(0,10).map(el => el.textContent.trim()).filter(Boolean),
-      paragraphs: Array.from(document.querySelectorAll('p')).slice(0,8).map(el => el.textContent.trim()).filter(t => t.length > 10),
-      tables: Array.from(document.querySelectorAll('table')).slice(0,3).map(table => ({
-        headers: Array.from(table.querySelectorAll('th')).map(th => th.textContent.trim()),
-        rows: Array.from(table.querySelectorAll('tr')).slice(1,15).map(tr =>
-          Array.from(tr.querySelectorAll('td')).map(td => td.textContent.trim())
-        ).filter(r => r.some(c => c)),
-      })),
-      links: Array.from(document.querySelectorAll('a[href]')).slice(0,10).map(a => ({ text: a.textContent.trim(), href: a.href })).filter(l => l.text),
-    }));
+    const data = await page.evaluate(() => {
+      const clean = t => (t||'').replace(/\s+/g,' ').trim();
+      return {
+        title: document.title,
+        url: window.location.href,
+        headings: Array.from(document.querySelectorAll('h1,h2,h3,h4')).slice(0,12)
+          .map(el => clean(el.textContent)).filter(Boolean),
+        paragraphs: Array.from(document.querySelectorAll('p,li'))
+          .map(el => clean(el.textContent)).filter(t => t.length > 15 && t.length < 400).slice(0,12),
+        tables: Array.from(document.querySelectorAll('table')).slice(0,4).map(table => ({
+          headers: Array.from(table.querySelectorAll('th')).map(th => clean(th.textContent)),
+          rows: Array.from(table.querySelectorAll('tr')).slice(0,20).map(tr =>
+            Array.from(tr.querySelectorAll('td,th')).map(td => clean(td.textContent))
+          ).filter(r => r.some(c => c)),
+        })).filter(t => t.rows.length > 0),
+        // Extract visible text blocks (good for price/result cards)
+        textBlocks: Array.from(document.querySelectorAll('[class*="price"],[class*="result"],[class*="card"],[class*="item"],[class*="flight"],[class*="ticket"],[class*="offer"]'))
+          .slice(0,8).map(el => clean(el.textContent)).filter(t => t.length > 5 && t.length < 500),
+        links: Array.from(document.querySelectorAll('a[href]')).slice(0,15)
+          .map(a => ({ text: clean(a.textContent), href: a.href })).filter(l => l.text.length > 2),
+      };
+    });
     await browser.close();
     return data;
   } catch (err) {
@@ -662,6 +703,115 @@ async function replayWorkflow(steps, inputs) {
     throw err;
   }
 }
+
+// ─── AI CHAT ENDPOINT ────────────────────────────────────────────────────────
+app.post('/api/workflows/:id/chat', requireAuth, checkUsageLimit, async (req, res) => {
+  const w = db.prepare('SELECT * FROM workflows WHERE id=?').get(req.params.id);
+  if (!w) return res.status(404).json({ error: 'API not found.' });
+
+  const isOwner = w.user_id === req.user.id;
+  const bought  = db.prepare('SELECT id FROM purchases WHERE buyer_id=? AND workflow_id=?').get(req.user.id, req.params.id);
+  if (!isOwner && !bought && w.price > 0) return res.status(403).json({ error: 'Purchase this API first.' });
+  if (req.user.plan === 'free') return res.status(403).json({ error: 'Running APIs requires a paid plan. Please upgrade.', upgradeRequired: true });
+
+  const variables = JSON.parse(w.variables || '[]');
+  const constants  = JSON.parse(w.constants  || '{}');
+  const { message } = req.body;
+  if (!message) return res.status(400).json({ error: 'No message provided.' });
+
+  // Step 1 — Extract variable values from natural language using Claude
+  let inputs = {};
+  let understood = '';
+  try {
+    const varList = variables.length
+      ? variables.map(v => `  - ${v.name} (label: "${v.label||v.name}", recorded value: "${v.defaultValue||''}")`).join('\n')
+      : '  (no variables — this API runs the same way every time)';
+
+    const raw = await askClaude(`You help extract form field values from a user's natural language request for a web automation task.
+
+API Name: "${w.name}"
+API Description: "${w.description || 'Not provided'}"
+Variables this API needs:
+${varList}
+
+User's request: "${message}"
+
+Instructions:
+- Extract a value for EVERY variable from the user's message
+- For travel: extract origin city/airport, destination city/airport, departure date, return date, passenger count
+- For dates: convert "next friday", "July 20", "next week" to a real date string (today is ${new Date().toDateString()})
+- For airports: use full name if known, e.g. "Dhaka (DAC)", "London Heathrow (LHR)"
+- If a variable is not mentioned, use its recorded value as-is
+- For email/login fields: always use the recorded default value unchanged
+
+Respond with ONLY valid JSON:
+{
+  "inputs": { "variableName": "value", ... },
+  "understood": "One short sentence describing the task, e.g. 'Searching for flights from Dhaka to London on 15 July, returning 25 July'"
+}`, 700);
+
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (match) {
+      const parsed = JSON.parse(match[0]);
+      inputs = { ...constants, ...(parsed.inputs || {}) };
+      understood = parsed.understood || 'Running your request...';
+    }
+  } catch (err) {
+    // Fall back to recorded defaults if AI fails
+    variables.forEach(v => { inputs[v.name] = v.defaultValue || ''; });
+    Object.assign(inputs, constants);
+    understood = 'Running with your inputs...';
+  }
+
+  // Step 2 — Replay the workflow
+  logUsage(req.user.id, 'call', w.id);
+  db.prepare('UPDATE workflows SET call_count=call_count+1, last_run=CURRENT_TIMESTAMP WHERE id=?').run(w.id);
+
+  const steps = JSON.parse(w.steps || '[]');
+  let result;
+  try {
+    result = await replayWorkflow(steps, inputs);
+  } catch (err) {
+    return res.status(500).json({ error: 'Execution failed: ' + err.message, understood });
+  }
+
+  // Step 3 — Summarize and generate smart action buttons using Claude
+  let summary = '';
+  let actionLabel = 'Search Again';
+  try {
+    const pageText = [
+      result.title,
+      ...result.headings.slice(0,5),
+      ...result.paragraphs.slice(0,6),
+      ...result.textBlocks.slice(0,5),
+      ...(result.tables||[]).flatMap(t => t.rows.slice(0,4).map(r => r.join(' | '))),
+    ].join('\n').slice(0, 2000);
+
+    const summaryRaw = await askClaude(`A web automation ran this task: "${understood}"
+It landed on: ${result.url}
+Page title: "${result.title}"
+Page content:
+${pageText}
+
+Write 2–4 sentences summarizing what was found. Be specific: mention prices, flight names, times, stocks, or whatever data is visible.
+If the page shows a CAPTCHA ("Are you a robot?"), say: "The website showed a CAPTCHA challenge. Try running again or log in manually first."
+If the page shows an error or login wall, say so clearly.
+
+Also on the last line write: ACTION: [short 2-word action label for a button, like "Book Flight", "Buy Ticket", "View Stock", "See Results", "Search Again"]`, 500);
+
+    const actionMatch = summaryRaw.match(/ACTION:\s*(.+)/i);
+    if (actionMatch) {
+      actionLabel = actionMatch[1].trim().replace(/['"]/g, '');
+      summary = summaryRaw.replace(/ACTION:.*$/im, '').trim();
+    } else {
+      summary = summaryRaw;
+    }
+  } catch (_) {
+    summary = `Completed. Landed on: ${result.title || result.url}`;
+  }
+
+  res.json({ success: true, understood, summary, actionLabel, result, inputsUsed: inputs });
+});
 
 // ─── MARKETPLACE ─────────────────────────────────────────────────────────────
 app.get('/api/marketplace', requireAuth, (req, res) => {
