@@ -1,958 +1,957 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>VibeCodingScraper — No-Code Web Scraping & API Generator</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <style>
-    ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-track { background: #1e293b; }
-    ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
-
-    .json-key    { color: #7dd3fc; }
-    .json-string { color: #86efac; }
-    .json-number { color: #fde68a; }
-    .json-bool   { color: #f9a8d4; }
-    .json-null   { color: #94a3b8; }
-
-    @keyframes pulse-ring {
-      0%   { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(239,68,68,0.5); }
-      70%  { transform: scale(1);   box-shadow: 0 0 0 8px rgba(239,68,68,0); }
-      100% { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(239,68,68,0); }
-    }
-    .recording-pulse { animation: pulse-ring 1.4s ease-out infinite; }
-
-    @keyframes fade-in {
-      from { opacity: 0; transform: translateY(6px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
-    .fade-in { animation: fade-in 0.3s ease-out forwards; }
-
-    /* Step tracker dots */
-    .step-done    { background: #10b981; }
-    .step-active  { background: #8b5cf6; }
-    .step-pending { background: #334155; }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shadman's API — No-Code Automation Platform</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  :root{--bg:#0f0f23;--surface:#1a1a3e;--border:#2d2d6b;--text:#e2e8f0;--muted:#94a3b8;--primary:#6366f1;--primary-dark:#4f46e5;--primary-light:#a5b4fc;--success:#10b981;--danger:#ef4444;--warning:#f59e0b}
+  [data-theme="light"]{--bg:#f1f5f9;--surface:#ffffff;--border:#e2e8f0;--text:#1e293b;--muted:#64748b;--primary:#6366f1;--primary-dark:#4f46e5;--primary-light:#6366f1;--success:#059669;--danger:#dc2626;--warning:#d97706}
+  body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;transition:background .3s,color .3s}
+  .page{display:none;min-height:calc(100vh - 60px)}
+  .page.active{display:block}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:24px}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:10px 20px;border-radius:10px;font-weight:600;font-size:14px;cursor:pointer;transition:all .2s;border:none;text-decoration:none;font-family:inherit}
+  .btn-primary{background:var(--primary);color:white}.btn-primary:hover{background:var(--primary-dark);transform:translateY(-1px)}
+  .btn-outline{background:transparent;color:var(--primary);border:2px solid var(--primary)}.btn-outline:hover{background:var(--primary);color:white}
+  .btn-ghost{background:transparent;color:var(--muted);border:none}.btn-ghost:hover{color:var(--text);background:rgba(255,255,255,.05)}
+  .btn-danger{background:var(--danger);color:white}.btn-danger:hover{opacity:.9}
+  .btn-success{background:var(--success);color:white}.btn-success:hover{opacity:.9}
+  .btn-lg{padding:14px 32px;font-size:16px;border-radius:12px}
+  .input{width:100%;padding:12px 16px;background:var(--bg);border:1.5px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;transition:border .2s;font-family:inherit}
+  .input:focus{outline:none;border-color:var(--primary)}
+  .label{display:block;margin-bottom:6px;font-size:13px;font-weight:600;color:var(--muted)}
+  .badge{display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600}
+  .badge-free{background:#1f2937;color:#9ca3af}
+  .badge-monthly{background:#312e81;color:#a5b4fc}
+  .badge-yearly{background:#451a03;color:#fbbf24}
+  .toast{position:fixed;bottom:24px;right:24px;z-index:9999;padding:14px 20px;border-radius:12px;font-size:14px;font-weight:500;box-shadow:0 8px 32px rgba(0,0,0,.4);animation:slideIn .3s ease;max-width:380px;line-height:1.5}
+  .toast-success{background:#064e3b;color:#6ee7b7;border:1px solid #065f46}
+  .toast-error{background:#450a0a;color:#fca5a5;border:1px solid #7f1d1d}
+  .toast-info{background:#1e1b4b;color:#a5b4fc;border:1px solid #312e81}
+  @keyframes slideIn{from{transform:translateX(110%);opacity:0}to{transform:translateX(0);opacity:1}}
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px}
+  .modal{background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:32px;width:100%;max-width:540px;max-height:90vh;overflow-y:auto}
+  .nav-link{display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:8px;color:var(--muted);font-size:14px;font-weight:500;cursor:pointer;transition:all .2s;text-decoration:none;white-space:nowrap}
+  .nav-link:hover,.nav-link.active{color:var(--primary);background:rgba(99,102,241,.12)}
+  .plan-card{border:2px solid var(--border);border-radius:20px;padding:32px;transition:all .3s;position:relative;background:var(--surface)}
+  .plan-card.popular{border-color:var(--primary);background:rgba(99,102,241,.05)}
+  .plan-card.best{border-color:#f59e0b;background:rgba(245,158,11,.05)}
+  .plan-card:hover{transform:translateY(-6px);box-shadow:0 24px 64px rgba(0,0,0,.35)}
+  .step-dot{width:36px;height:36px;border-radius:50%;background:rgba(99,102,241,.15);border:2px solid var(--primary);display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--primary);font-size:14px;flex-shrink:0}
+  .rec-pulse{width:10px;height:10px;background:var(--danger);border-radius:50%;animation:recPulse 1s infinite;display:inline-block}
+  @keyframes recPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.85)}}
+  .api-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;transition:all .2s}
+  .api-card:hover{border-color:var(--primary);box-shadow:0 8px 32px rgba(99,102,241,.15)}
+  .tab-btn{padding:8px 20px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;transition:all .2s;color:var(--muted);background:transparent;border:none;font-family:inherit}
+  .tab-btn.active{background:var(--primary);color:white}
+  .progress-bar{height:6px;background:var(--border);border-radius:999px;overflow:hidden}
+  .progress-fill{height:100%;background:linear-gradient(90deg,#6366f1,#8b5cf6);border-radius:999px;transition:width .6s ease}
+  ::-webkit-scrollbar{width:5px;height:5px}
+  ::-webkit-scrollbar-track{background:var(--surface)}
+  ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+  ::-webkit-scrollbar-thumb:hover{background:var(--primary)}
+  textarea.input{resize:vertical}
+  @media(max-width:700px){.auth-left{display:none!important}.auth-grid{grid-template-columns:1fr!important}.plans-grid{grid-template-columns:1fr!important}.stats-grid{grid-template-columns:1fr 1fr!important}}
+</style>
 </head>
+<body>
 
-<body class="bg-slate-900 text-slate-100 min-h-screen font-sans">
+<!-- NAV -->
+<nav id="main-nav" style="display:none;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:200">
+  <div style="max-width:1200px;margin:0 auto;padding:0 20px;display:flex;align-items:center;height:60px;gap:6px">
+    <div style="display:flex;align-items:center;gap:10px;margin-right:20px;cursor:pointer;flex-shrink:0" onclick="showPage('home')">
+      <div style="width:34px;height:34px;background:linear-gradient(135deg,#6366f1,#8b5cf6);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px">⚡</div>
+      <span style="font-weight:800;font-size:15px;color:var(--primary-light);white-space:nowrap">Shadman's API</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:2px;flex:1;overflow-x:auto">
+      <a class="nav-link" onclick="showPage('home')">🏠 Home</a>
+      <a class="nav-link" onclick="showPage('recorder')">🎙️ Record</a>
+      <a class="nav-link" onclick="showPage('my-apis')">📦 My APIs</a>
+      <a class="nav-link" onclick="showPage('marketplace')">🛍️ Marketplace</a>
+      <a class="nav-link" id="admin-nav-link" onclick="showPage('admin')" style="display:none">🛡️ Admin</a>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+      <button class="btn-ghost btn" onclick="toggleTheme()" style="padding:8px 10px;font-size:16px" id="theme-btn">🌙</button>
+      <div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="showPage('settings')">
+        <div id="nav-avatar" style="width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#8b5cf6);display:flex;align-items:center;justify-content:center;font-weight:700;color:white;font-size:14px;overflow:hidden;flex-shrink:0">?</div>
+        <div id="nav-user-info" style="display:none">
+          <div style="font-size:13px;font-weight:600;line-height:1.2" id="nav-user-name">User</div>
+          <div id="nav-plan-badge"></div>
+        </div>
+      </div>
+      <button class="btn btn-ghost" onclick="logout()" style="font-size:13px;padding:6px 12px;white-space:nowrap">Sign out</button>
+    </div>
+  </div>
+</nav>
 
-  <!-- ═══ HEADER ═══════════════════════════════════════════════ -->
-  <header class="bg-slate-800 border-b border-slate-700 px-6 py-4 flex items-center justify-between sticky top-0 z-10">
-    <div class="flex items-center gap-3">
-      <div class="w-8 h-8 bg-violet-500 rounded-lg flex items-center justify-center text-white font-bold text-sm select-none">V</div>
-      <div>
-        <h1 class="text-lg font-bold text-white leading-tight">VibeCodingScraper</h1>
-        <p class="text-xs text-slate-400">No-Code Web Scraping &amp; API Generator</p>
+<!-- AUTH PAGE -->
+<div id="page-auth" class="page active" style="min-height:100vh">
+  <div style="min-height:100vh;display:grid;grid-template-columns:1fr 1fr" class="auth-grid">
+    <div class="auth-left" style="background:linear-gradient(135deg,#0a0a1a,#1e1b4b);padding:60px 50px;display:flex;flex-direction:column;justify-content:center">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:40px">
+        <div style="width:52px;height:52px;background:linear-gradient(135deg,#6366f1,#8b5cf6);border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:26px">⚡</div>
+        <div><div style="font-size:22px;font-weight:800;color:#a5b4fc">Shadman's API</div><div style="font-size:12px;color:#6366f1">No-Code Automation Platform</div></div>
+      </div>
+      <h1 style="font-size:38px;font-weight:800;line-height:1.2;color:#f1f5f9;margin-bottom:16px">Turn any website into a <span style="background:linear-gradient(135deg,#6366f1,#a855f7,#06b6d4);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">live API</span></h1>
+      <p style="color:#94a3b8;font-size:15px;line-height:1.8;margin-bottom:36px">Record what you do on any website and turn your actions into a reusable, shareable API. No coding required.</p>
+      <div style="display:flex;flex-direction:column;gap:16px">
+        <div style="display:flex;align-items:center;gap:14px"><div style="width:38px;height:38px;background:rgba(99,102,241,.2);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">🎙️</div><div style="font-size:14px;color:#94a3b8"><strong style="color:#e2e8f0">Record once</strong> — click Record, do your task on any website</div></div>
+        <div style="display:flex;align-items:center;gap:14px"><div style="width:38px;height:38px;background:rgba(99,102,241,.2);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">⚡</div><div style="font-size:14px;color:#94a3b8"><strong style="color:#e2e8f0">Run forever</strong> — replay with different inputs anytime</div></div>
+        <div style="display:flex;align-items:center;gap:14px"><div style="width:38px;height:38px;background:rgba(99,102,241,.2);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">🛍️</div><div style="font-size:14px;color:#94a3b8"><strong style="color:#e2e8f0">Sell to others</strong> — list on our marketplace and earn money</div></div>
       </div>
     </div>
-    <span class="text-xs text-slate-500">by Shadman Shadid Zim</span>
-  </header>
-
-  <!-- ═══ MAIN LAYOUT ══════════════════════════════════════════ -->
-  <main class="p-6 grid grid-cols-1 lg:grid-cols-3 gap-6 max-w-7xl mx-auto">
-
-    <!-- ── LEFT (2/3): Configuration + Results ─────────────── -->
-    <section class="lg:col-span-2 flex flex-col gap-5">
-
-      <!-- ┌─ STEP 1: MODE + INPUTS ────────────────────────── ┐ -->
-      <div class="bg-slate-800 rounded-xl border border-slate-700 p-5 flex flex-col gap-5">
-
-        <!-- Mode toggle -->
-        <div>
-          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Step 1 — Choose Mode</p>
-          <div class="inline-flex bg-slate-900 rounded-lg p-1 gap-1">
-            <button id="btnModeQuick" onclick="setMode('quick')"
-              class="text-xs px-4 py-2 rounded-md font-semibold transition-all bg-violet-600 text-white">
-              ⚡ Quick Scrape
-            </button>
-            <button id="btnModeRecord" onclick="setMode('record')"
-              class="text-xs px-4 py-2 rounded-md font-semibold transition-all text-slate-400 hover:text-slate-200">
-              ● Workflow Recorder
-            </button>
-          </div>
-          <!-- Mode description -->
-          <p id="modeDesc" class="text-xs text-slate-500 mt-2">
-            Visits a URL invisibly and extracts all text, tables, and links from the homepage.
-          </p>
+    <div style="display:flex;align-items:center;justify-content:center;padding:40px;background:var(--bg)">
+      <div style="width:100%;max-width:400px">
+        <div style="display:flex;gap:4px;background:var(--surface);padding:4px;border-radius:12px;margin-bottom:28px;border:1px solid var(--border)">
+          <button class="tab-btn active" id="tab-login" onclick="switchAuthTab('login')" style="flex:1">Sign In</button>
+          <button class="tab-btn" id="tab-signup" onclick="switchAuthTab('signup')" style="flex:1">Create Account</button>
         </div>
-
-        <!-- URL input (always visible) -->
-        <div class="flex flex-col gap-1.5">
-          <label class="text-xs font-semibold text-slate-300">🌐 Website URL</label>
-          <input id="urlInput" type="url"
-            placeholder="https://www.dsebd.org/"
-            class="bg-slate-900 border border-slate-600 rounded-lg px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500" />
+        <a href="/auth/google" class="btn" style="width:100%;background:white;color:#1e293b;border:2px solid #e2e8f0;margin-bottom:20px;font-size:15px;padding:13px 20px;border-radius:10px">
+          <img src="https://www.google.com/favicon.ico" width="18" height="18" alt="G" style="border-radius:2px"> Continue with Google
+        </a>
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+          <div style="flex:1;height:1px;background:var(--border)"></div>
+          <span style="color:var(--muted);font-size:12px;white-space:nowrap">or continue with email</span>
+          <div style="flex:1;height:1px;background:var(--border)"></div>
         </div>
-
-        <!-- ── RECORDER-ONLY FIELDS (hidden in quick mode) ── -->
-        <div id="recorderFields" class="hidden flex flex-col gap-4 fade-in">
-
-          <!-- Search Query -->
-          <div class="flex flex-col gap-1.5">
-            <label class="text-xs font-semibold text-slate-300">🔍 Search Query</label>
-            <input id="searchQuery" type="text"
-              placeholder='e.g. "ROBI" or "GP" — what you want to look up'
-              class="bg-slate-900 border border-slate-600 rounded-lg px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500" />
-          </div>
-
-          <!-- CSS Selector with guide -->
-          <div class="flex flex-col gap-1.5">
-            <div class="flex items-center justify-between">
-              <label class="text-xs font-semibold text-slate-300">
-                🎯 Search Box CSS Selector
-                <span class="text-slate-500 font-normal">(Leave blank to Auto-Detect)</span>
-              </label>
-              <button onclick="toggleGuide()"
-                class="text-xs text-violet-400 hover:text-violet-300 underline underline-offset-2">
-                ? How to find this
-              </button>
-            </div>
-            <input id="searchSelector" type="text"
-              placeholder='Leave blank — or type  #inputText  for DSE'
-              class="bg-slate-900 border border-slate-600 rounded-lg px-4 py-2.5 text-sm text-white font-mono placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500" />
-            <!-- Smart-scan notice -->
-            <p class="text-xs text-emerald-400/80 flex items-center gap-1.5">
-              <span>✨</span>
-              <span>Smart-scan is active. Leave this blank and the engine will automatically detect the search field.</span>
-            </p>
-
-            <!-- Common presets -->
-            <div class="flex flex-wrap gap-2">
-              <span class="text-xs text-slate-500">Common:</span>
-              <!-- DSE-specific — verified by inspection -->
-              <button onclick="useSelector('#inputText')"
-                class="text-xs bg-violet-900 hover:bg-violet-700 border border-violet-600 text-violet-200 px-2 py-0.5 rounded font-mono transition-colors">
-                #inputText <span class="text-violet-400 not-italic text-[10px]">DSE ✓</span>
-              </button>
-              <button onclick="useSelector('input[type=&quot;search&quot;]')"
-                class="text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-0.5 rounded font-mono transition-colors">input[type="search"]</button>
-              <button onclick="useSelector('input[name=&quot;q&quot;]')"
-                class="text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-0.5 rounded font-mono transition-colors">input[name="q"]</button>
-              <button onclick="useSelector('#searchBox')"
-                class="text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-2 py-0.5 rounded font-mono transition-colors">#searchBox</button>
-            </div>
-
-            <!-- ── CSS SELECTOR GUIDE (collapsible) ── -->
-            <div id="selectorGuide"
-              class="hidden bg-slate-900 border border-violet-900 rounded-xl p-4 mt-1 flex flex-col gap-3 fade-in">
-              <p class="text-xs font-bold text-violet-300">How to find the CSS Selector in 4 steps:</p>
-
-              <div class="flex flex-col gap-2">
-                <!-- Step A -->
-                <div class="flex gap-3 items-start">
-                  <span class="w-5 h-5 rounded-full bg-violet-700 text-white text-xs flex items-center justify-center shrink-0 mt-0.5">1</span>
-                  <div>
-                    <p class="text-xs text-slate-200 font-semibold">Open the target website in Chrome</p>
-                    <p class="text-xs text-slate-400">Go to <span class="font-mono text-violet-300">https://www.dsebd.org/</span> in a separate Chrome tab.</p>
-                  </div>
-                </div>
-                <!-- Step B -->
-                <div class="flex gap-3 items-start">
-                  <span class="w-5 h-5 rounded-full bg-violet-700 text-white text-xs flex items-center justify-center shrink-0 mt-0.5">2</span>
-                  <div>
-                    <p class="text-xs text-slate-200 font-semibold">Right-click the search box → "Inspect"</p>
-                    <p class="text-xs text-slate-400">A panel opens at the bottom showing the HTML code for that element.</p>
-                  </div>
-                </div>
-                <!-- Step C -->
-                <div class="flex gap-3 items-start">
-                  <span class="w-5 h-5 rounded-full bg-violet-700 text-white text-xs flex items-center justify-center shrink-0 mt-0.5">3</span>
-                  <div>
-                    <p class="text-xs text-slate-200 font-semibold">Look for <code class="bg-slate-700 px-1 rounded">id=</code> or <code class="bg-slate-700 px-1 rounded">name=</code> in the blue-highlighted line</p>
-                    <p class="text-xs text-slate-400 mt-1">Examples of what you might see:</p>
-                    <div class="bg-slate-800 rounded-lg p-2 mt-1 font-mono text-xs space-y-1">
-                      <p class="text-slate-300">&lt;input <span class="text-yellow-300">id="SearchBox"</span> type="text" /&gt;</p>
-                      <p class="text-slate-300">&lt;input <span class="text-yellow-300">name="q"</span> type="search" /&gt;</p>
-                      <p class="text-slate-300">&lt;input <span class="text-yellow-300">type="text"</span> class="search-input" /&gt;</p>
-                    </div>
-                  </div>
-                </div>
-                <!-- Step D -->
-                <div class="flex gap-3 items-start">
-                  <span class="w-5 h-5 rounded-full bg-violet-700 text-white text-xs flex items-center justify-center shrink-0 mt-0.5">4</span>
-                  <div>
-                    <p class="text-xs text-slate-200 font-semibold">Translate what you saw into a selector:</p>
-                    <div class="bg-slate-800 rounded-lg p-2 mt-1 font-mono text-xs space-y-1">
-                      <p><span class="text-slate-400">id="SearchBox"</span> <span class="text-slate-500">→</span> <span class="text-emerald-300">#SearchBox</span></p>
-                      <p><span class="text-slate-400">name="q"</span> <span class="text-slate-500">→</span> <span class="text-emerald-300">input[name="q"]</span></p>
-                      <p><span class="text-slate-400">type="text" (no id/name)</span> <span class="text-slate-500">→</span> <span class="text-emerald-300">input[type="text"]</span></p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <p class="text-xs text-slate-500 border-t border-slate-700 pt-2">
-                💡 <strong class="text-slate-400">Confirmed for DSE (dsebd.org):</strong>
-                Use <span class="font-mono text-violet-300">#inputText</span> — we inspected the page and that is the exact <code class="bg-slate-700 px-1 rounded">id=</code> of their company search box.
-              </p>
-            </div>
-            <!-- ── END CSS GUIDE ── -->
-
-          </div>
+        <form id="login-form" onsubmit="handleLogin(event)">
+          <div style="margin-bottom:14px"><label class="label">Email Address</label><input class="input" type="email" id="login-email" placeholder="you@example.com" required></div>
+          <div style="margin-bottom:22px"><label class="label">Password</label><input class="input" type="password" id="login-password" placeholder="Your password" required></div>
+          <button type="submit" class="btn btn-primary btn-lg" style="width:100%" id="login-btn">Sign In →</button>
+        </form>
+        <form id="signup-form" onsubmit="handleSignup(event)" style="display:none">
+          <div style="margin-bottom:14px"><label class="label">Full Name</label><input class="input" type="text" id="signup-name" placeholder="Your name" required></div>
+          <div style="margin-bottom:14px"><label class="label">Email Address</label><input class="input" type="email" id="signup-email" placeholder="you@example.com" required></div>
+          <div style="margin-bottom:22px"><label class="label">Password <span style="color:var(--muted);font-weight:400">(min. 6 characters)</span></label><input class="input" type="password" id="signup-password" placeholder="Create a password" required></div>
+          <button type="submit" class="btn btn-primary btn-lg" style="width:100%" id="signup-btn">Create Account →</button>
+        </form>
+        <div style="text-align:center;margin-top:20px">
+          <button class="btn btn-ghost" onclick="toggleTheme()" style="font-size:13px" id="auth-theme-btn">🌙 Switch to Light Mode</button>
         </div>
-        <!-- ── END RECORDER FIELDS ── -->
-
-        <!-- Action button -->
-        <div class="flex flex-col gap-2">
-          <button id="actionBtn" onclick="startAction()"
-            class="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-white text-sm font-bold py-3 rounded-lg transition-colors flex items-center justify-center gap-2">
-            <span id="actionBtnIcon">⚡</span>
-            <span id="actionBtnText">Scrape Website</span>
-          </button>
-
-          <!-- Recorder-only notice (hidden in quick mode) -->
-          <div id="recorderNotice" class="hidden flex items-center gap-2 bg-amber-900/30 border border-amber-700 rounded-lg px-3 py-2">
-            <span class="text-amber-400 text-sm">👁</span>
-            <p class="text-xs text-amber-300">
-              A real browser window will appear on your screen. Watch the robot navigate, find the search box, and type your query live.
-            </p>
-          </div>
-        </div>
-
-        <!-- ── LIVE STATUS TRACKER (visible while running) ── -->
-        <div id="statusTracker" class="hidden flex flex-col gap-3">
-          <div class="w-full h-px bg-slate-700"></div>
-          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Live Status</p>
-          <div id="stepList" class="flex flex-col gap-2"></div>
-        </div>
-
-      </div>
-      <!-- └────────────────────────────────────────────────── ┘ -->
-
-
-      <!-- ┌─ STEP 2: RESULTS ──────────────────────────────── ┐ -->
-      <div id="resultsCard" class="hidden bg-slate-800 rounded-xl border border-slate-700 p-5 flex flex-col gap-5 fade-in">
-
-        <!-- Result header -->
-        <div class="flex items-start justify-between gap-3">
-          <div>
-            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Step 2 — Review Extracted Data</p>
-            <p id="resultUrl" class="text-xs text-slate-500 mt-0.5 break-all"></p>
-            <!-- Search badge (only shown for recorder results) -->
-            <div id="searchBadge" class="hidden mt-2 inline-flex items-center gap-1.5 bg-violet-900/50 border border-violet-700 rounded-full px-3 py-1">
-              <span class="text-violet-400 text-xs">🔍</span>
-              <span id="searchBadgeText" class="text-xs text-violet-200 font-medium"></span>
-            </div>
-          </div>
-          <span class="shrink-0 text-xs bg-emerald-900 text-emerald-300 px-2 py-1 rounded-full">✓ Success</span>
-        </div>
-
-        <!-- Summary stat tiles -->
-        <div id="summaryTiles" class="grid grid-cols-4 gap-3 text-center"></div>
-
-        <!-- Tabs -->
-        <div class="flex gap-1 border-b border-slate-700">
-          <button onclick="showTab('page')"  id="tab-page"  class="tab-btn text-xs px-3 py-2 border-b-2 border-violet-500 text-violet-400 font-semibold -mb-px">Page Content</button>
-          <button onclick="showTab('api')"   id="tab-api"   class="tab-btn text-xs px-3 py-2 border-b-2 border-transparent text-slate-400 hover:text-slate-200 -mb-px">API Calls</button>
-          <button onclick="showTab('raw')"   id="tab-raw"   class="tab-btn text-xs px-3 py-2 border-b-2 border-transparent text-slate-400 hover:text-slate-200 -mb-px">Raw JSON</button>
-        </div>
-
-        <div id="pane-page" class="tab-pane"><div id="pageContentView"></div></div>
-
-        <div id="pane-api" class="tab-pane hidden flex flex-col gap-3">
-          <p id="apiTabDesc" class="text-xs text-slate-400">
-            These are the <strong class="text-slate-200">hidden API calls</strong> the website made.
-          </p>
-          <div id="apiCallsView"></div>
-        </div>
-
-        <div id="pane-raw" class="tab-pane hidden">
-          <pre id="rawJsonView" class="bg-slate-900 rounded-lg p-4 text-xs overflow-auto max-h-96 leading-relaxed"></pre>
-        </div>
-
-        <!-- Save as workflow -->
-        <div class="border-t border-slate-700 pt-4 flex flex-col gap-2">
-          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Step 3 — Save as Replayable Workflow / API</p>
-          <div class="flex gap-3">
-            <input id="workflowName" type="text"
-              placeholder='Name this workflow, e.g. "DSE — ROBI Stock Lookup"'
-              class="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-            <button onclick="saveWorkflow()"
-              class="bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold px-5 py-2.5 rounded-lg transition-colors whitespace-nowrap">
-              Save Workflow
-            </button>
-          </div>
-        </div>
-
-      </div>
-      <!-- └────────────────────────────────────────────────── ┘ -->
-
-      <!-- Error card -->
-      <div id="errorCard" class="hidden bg-red-900/30 border border-red-700 rounded-xl p-5 fade-in">
-        <p class="text-sm text-red-300 font-semibold">Action failed</p>
-        <p id="errorMsg" class="text-xs text-red-400 mt-1 leading-relaxed"></p>
-      </div>
-
-    </section>
-
-    <!-- ── RIGHT (1/3): Saved Workflows ─────────────────────── -->
-    <section class="bg-slate-800 rounded-xl border border-slate-700 p-5 flex flex-col gap-4 h-fit lg:sticky lg:top-24">
-      <div>
-        <h2 class="text-sm font-semibold text-slate-300 uppercase tracking-wider">Saved Workflows</h2>
-        <p class="text-xs text-slate-500 mt-1">Each saved workflow is a replayable API. Hit Run to fetch fresh data from the same search.</p>
-      </div>
-      <div id="workflowList" class="flex flex-col gap-3">
-        <p class="text-xs text-slate-500 italic">No workflows saved yet.</p>
-      </div>
-    </section>
-
-  </main>
-
-
-  <!-- ═══ JAVASCRIPT ════════════════════════════════════════════
-       Think of this as the dashboard's brain — it decides what
-       to show, what to send to the server, and what to do with
-       the results that come back.
-  ════════════════════════════════════════════════════════════ -->
-  <script>
-
-    // ── App state ──────────────────────────────────────────────
-    let currentMode = "quick";   // "quick" or "record"
-    let currentData = null;      // last successful scrape/recording result
-    let stepTimer   = null;      // interval for cycling status steps
-
-    // ── MODE SWITCHER ──────────────────────────────────────────
-    function setMode(mode) {
-      currentMode = mode;
-
-      const isRecord = mode === "record";
-
-      // Toggle button styles
-      document.getElementById("btnModeQuick").className  =
-        `text-xs px-4 py-2 rounded-md font-semibold transition-all ${!isRecord ? "bg-violet-600 text-white" : "text-slate-400 hover:text-slate-200"}`;
-      document.getElementById("btnModeRecord").className =
-        `text-xs px-4 py-2 rounded-md font-semibold transition-all ${isRecord  ? "bg-red-600 text-white"    : "text-slate-400 hover:text-slate-200"}`;
-
-      // Show / hide extra fields
-      document.getElementById("recorderFields").classList.toggle("hidden", !isRecord);
-      document.getElementById("recorderNotice").classList.toggle("hidden", !isRecord);
-
-      // Update description, button icon/text
-      document.getElementById("modeDesc").textContent = isRecord
-        ? "Opens a visible browser window on your screen. Watch the robot navigate to the site, locate the search box, type your query character by character, and capture the live results."
-        : "Visits a URL invisibly and extracts all text, tables, and links from the homepage.";
-
-      document.getElementById("actionBtnIcon").textContent = isRecord ? "●" : "⚡";
-      document.getElementById("actionBtnText").textContent = isRecord ? "Record Workflow" : "Scrape Website";
-
-      document.getElementById("actionBtn").className =
-        `w-full ${isRecord ? "bg-red-600 hover:bg-red-500" : "bg-violet-600 hover:bg-violet-500"} disabled:opacity-40 text-white text-sm font-bold py-3 rounded-lg transition-colors flex items-center justify-center gap-2`;
-    }
-
-    // ── SELECTOR GUIDE TOGGLE ──────────────────────────────────
-    function toggleGuide() {
-      document.getElementById("selectorGuide").classList.toggle("hidden");
-    }
-
-    // ── PRESET SELECTOR CHIPS ──────────────────────────────────
-    function useSelector(value) {
-      document.getElementById("searchSelector").value = value;
-    }
-
-    // ── MAIN ACTION ────────────────────────────────────────────
-    async function startAction() {
-      const url = document.getElementById("urlInput").value.trim();
-      if (!url.startsWith("http")) { alert("Please enter a full URL starting with https://"); return; }
-
-      const isRecord = currentMode === "record";
-
-      let searchQuery    = null;
-      let searchSelector = null;
-
-      if (isRecord) {
-        searchQuery    = document.getElementById("searchQuery").value.trim();
-        searchSelector = document.getElementById("searchSelector").value.trim() || null;
-        if (!searchQuery) { alert("Please enter a Search Query."); return; }
-        // searchSelector is now optional — blank means auto-detect runs on the server
-      }
-
-      // UI: disable button, show tracker, hide old results
-      setRunning(true);
-      hideCards();
-      startStepTracker(isRecord, searchQuery);
-
-      try {
-        const response = await fetch("/api/scrape", {
-          method:  "POST",
-          headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify({ url, searchQuery, searchSelector })
-        });
-
-        const json = await response.json();
-        if (!response.ok) throw new Error(json.error || "Unknown server error");
-
-        currentData = json.data;
-        renderResults(currentData);
-
-      } catch (err) {
-        showError(err.message);
-      } finally {
-        setRunning(false);
-        stopStepTracker();
-      }
-    }
-
-    // ── LIVE STEP TRACKER ──────────────────────────────────────
-    // Cycles through status messages so the user sees progress
-    // while the server is working (each step ≈ 3–4 seconds).
-    function startStepTracker(isRecord, query) {
-      const steps = isRecord
-        ? [
-            "Launching visible browser window on your screen...",
-            `Navigating to the website — page is loading...`,
-            `Page loaded. Locating the search box...`,
-            `Found the search box! Typing "${query}" one character at a time...`,
-            "Pressing Enter — waiting for search results to load...",
-            "Intercepting JSON API calls triggered by the search...",
-            "Extracting content from the results page...",
-            "Packaging results — almost done..."
-          ]
-        : [
-            "Launching headless browser (invisible)...",
-            "Navigating to the website...",
-            "Page loaded. Intercepting network traffic...",
-            "Extracting headings, tables, links, and paragraphs...",
-            "Packaging results..."
-          ];
-
-      let index = 0;
-
-      const tracker = document.getElementById("statusTracker");
-      const list    = document.getElementById("stepList");
-      tracker.classList.remove("hidden");
-
-      function renderSteps() {
-        list.innerHTML = steps.map((s, i) => {
-          let dotClass   = "step-pending";
-          let textClass  = "text-slate-500";
-          let icon       = "";
-          if (i < index)  { dotClass = "step-done";   textClass = "text-slate-400"; icon = "✓ "; }
-          if (i === index){ dotClass = "step-active";  textClass = "text-slate-100"; icon = ""; }
-          return `
-            <div class="flex items-center gap-2.5">
-              <div class="w-2.5 h-2.5 rounded-full shrink-0 ${dotClass} ${i === index ? "recording-pulse" : ""}"></div>
-              <p class="text-xs ${textClass}">${icon}${esc(s)}</p>
-            </div>`;
-        }).join("");
-      }
-
-      renderSteps();
-      stepTimer = setInterval(() => {
-        if (index < steps.length - 1) { index++; renderSteps(); }
-      }, isRecord ? 3500 : 2500);
-    }
-
-    function stopStepTracker() {
-      clearInterval(stepTimer);
-      document.getElementById("statusTracker").classList.add("hidden");
-    }
-
-    // ── RENDER RESULTS ─────────────────────────────────────────
-    function renderResults(data) {
-      const pc = data.pageContent;
-
-      // URL + search badge
-      document.getElementById("resultUrl").textContent = data.url;
-      if (data.searchQuery) {
-        document.getElementById("searchBadge").classList.remove("hidden");
-        const autoTag = data.autoDetected ? ` · auto-detected: ${esc(data.searchSelector)}` : "";
-        document.getElementById("searchBadgeText").textContent = `Search: "${data.searchQuery}"${autoTag}`;
-        document.getElementById("apiTabDesc").innerHTML =
-          `These are the <strong class="text-slate-200">JSON API calls triggered strictly by the "${esc(data.searchQuery)}" search</strong> — captured after Enter was pressed, not during page load.`;
-      } else {
-        document.getElementById("searchBadge").classList.add("hidden");
-        document.getElementById("apiTabDesc").innerHTML =
-          `These are the <strong class="text-slate-200">hidden API calls</strong> the website made while loading.`;
-      }
-
-      // Stat tiles
-      document.getElementById("summaryTiles").innerHTML = [
-        tile(pc.headings.length,                 "Headings"),
-        tile(pc.paragraphs.length,               "Paragraphs"),
-        tile(pc.links.length,                    "Links"),
-        tile(pc.tables.length + " tables / " + (data.interceptedApiCalls || []).length + " API", "Tables / API"),
-      ].join("");
-
-      // Page Content
-      let pageHtml = "";
-      if (pc.title)
-        pageHtml += section("Page Title", `<p class="text-sm text-white">${esc(pc.title)}</p>`);
-
-      if (pc.headings.length)
-        pageHtml += section("Headings",
-          pc.headings.map(h =>
-            `<div class="flex gap-2 py-0.5">
-               <span class="text-xs text-violet-400 w-7 shrink-0">${esc(h.level)}</span>
-               <span class="text-xs text-slate-300">${esc(h.text)}</span>
-             </div>`
-          ).join(""));
-
-      if (pc.tables.length) {
-        pc.tables.forEach((t, i) => {
-          if (!t.headers.length && !t.rows.length) return;
-          let th = `<div class="overflow-x-auto"><table class="text-xs w-full border-collapse">`;
-          if (t.headers.length)
-            th += `<thead><tr>${t.headers.map(h => `<th class="border border-slate-600 px-2 py-1 bg-slate-700 text-slate-200 text-left">${esc(h)}</th>`).join("")}</tr></thead>`;
-          th += `<tbody>${t.rows.slice(0, 15).map(r =>
-            `<tr>${r.map(c => `<td class="border border-slate-700 px-2 py-1 text-slate-300">${esc(c)}</td>`).join("")}</tr>`
-          ).join("")}</tbody></table></div>`;
-          pageHtml += section(`Table ${i + 1}`, th);
-        });
-      }
-
-      if (pc.paragraphs.length)
-        pageHtml += section("Paragraphs",
-          pc.paragraphs.map(p => `<p class="text-xs text-slate-300 mb-2">${esc(p)}</p>`).join(""));
-
-      if (pc.links.length)
-        pageHtml += section("Links",
-          pc.links.map(l =>
-            `<div class="flex gap-2 items-start py-0.5">
-               <span class="text-violet-400 text-xs shrink-0 mt-0.5">→</span>
-               <a href="${esc(l.href)}" target="_blank"
-                  class="text-xs text-slate-300 hover:text-violet-300 break-all">${esc(l.text)}</a>
-             </div>`
-          ).join(""));
-
-      document.getElementById("pageContentView").innerHTML =
-        pageHtml || `<p class="text-xs text-slate-400">No structured content found on this page.</p>`;
-
-      // API Calls
-      const calls = data.interceptedApiCalls || [];
-      document.getElementById("apiCallsView").innerHTML = calls.length
-        ? calls.map(c =>
-            `<div class="mb-4">
-               <p class="text-xs text-violet-300 font-mono mb-1 break-all">📡 ${esc(c.endpoint)}</p>
-               <pre class="bg-slate-900 rounded-lg p-3 text-xs overflow-auto max-h-48 leading-relaxed">${syntaxHighlight(JSON.stringify(c.data, null, 2))}</pre>
-             </div>`).join("")
-        : `<p class="text-xs text-slate-400">
-             No JSON API calls intercepted.
-             ${data.searchQuery
-               ? "DSE may be returning results as HTML rather than a hidden JSON API — check the Page Content tab for tables."
-               : "This page delivers its data directly in HTML (old-style site)."}
-           </p>`;
-
-      // Raw JSON
-      document.getElementById("rawJsonView").innerHTML =
-        syntaxHighlight(JSON.stringify(data, null, 2));
-
-      document.getElementById("resultsCard").classList.remove("hidden");
-      showTab("page");
-    }
-
-    // ── SAVE WORKFLOW ──────────────────────────────────────────
-    async function saveWorkflow() {
-      const name = document.getElementById("workflowName").value.trim();
-      if (!name)        { alert("Please give your workflow a name first."); return; }
-      if (!currentData) { alert("Nothing to save yet — run a scrape or recording first."); return; }
-
-      const res = await fetch("/api/workflows", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name,
-          url:            currentData.url,
-          searchQuery:    currentData.searchQuery    || null,
-          searchSelector: currentData.searchSelector || null,
-          data:           currentData
-        })
-      });
-
-      if (res.ok) {
-        document.getElementById("workflowName").value = "";
-        loadWorkflows();
-      }
-    }
-
-    // ── LOAD WORKFLOWS ─────────────────────────────────────────
-    async function loadWorkflows() {
-      const res  = await fetch("/api/workflows");
-      const list = await res.json();
-      const box  = document.getElementById("workflowList");
-
-      if (!list.length) {
-        box.innerHTML = `<p class="text-xs text-slate-500 italic">No workflows saved yet.</p>`;
-        return;
-      }
-
-      box.innerHTML = list.map(w => `
-        <div class="bg-slate-900 rounded-lg p-3 border border-slate-700">
-          <p class="text-sm text-white font-medium truncate">${esc(w.name)}</p>
-          <p class="text-xs text-slate-500 truncate mt-0.5">${esc(w.url)}</p>
-          ${w.searchQuery
-            ? `<span class="inline-flex items-center gap-1 mt-1 text-xs bg-violet-900/50 text-violet-300 border border-violet-800 rounded-full px-2 py-0.5">🔍 ${esc(w.searchQuery)}</span>`
-            : ""}
-          <p class="text-xs text-slate-600 mt-1">${new Date(w.createdAt).toLocaleDateString()}</p>
-          <div class="flex gap-2 mt-2">
-            <button onclick="runWorkflow('${w.id}')"
-              class="flex-1 ${w.searchQuery ? "bg-red-700 hover:bg-red-600" : "bg-violet-700 hover:bg-violet-600"} text-white text-xs py-1.5 rounded transition-colors">
-              ${w.searchQuery ? "● Re-record" : "▶ Run Again"}
-            </button>
-            <button onclick="deleteWorkflow('${w.id}')"
-              class="bg-slate-700 hover:bg-red-700 text-slate-300 text-xs px-2.5 py-1.5 rounded transition-colors">
-              ✕
-            </button>
-          </div>
-          ${w.searchSelector ? `
-          <button onclick="openApiModal('${w.id}', '${esc(w.name)}')"
-            class="w-full mt-2 bg-emerald-900/50 hover:bg-emerald-800/70 border border-emerald-700 text-emerald-300 text-xs py-1.5 rounded transition-colors font-semibold">
-            🔗 Live API Endpoint
-          </button>` : ""}
-        </div>`
-      ).join("");
-    }
-
-    // ── RUN WORKFLOW ───────────────────────────────────────────
-    async function runWorkflow(id) {
-      const list = await (await fetch("/api/workflows")).json();
-      const wf   = list.find(w => w.id === id);
-      setRunning(true);
-      hideCards();
-      startStepTracker(Boolean(wf?.searchQuery), wf?.searchQuery);
-
-      try {
-        const res  = await fetch(`/api/workflows/${id}/run`, { method: "POST" });
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error);
-        currentData = json.data;
-        renderResults(currentData);
-      } catch (err) {
-        showError(err.message);
-      } finally {
-        setRunning(false);
-        stopStepTracker();
-      }
-    }
-
-    // ── DELETE WORKFLOW ────────────────────────────────────────
-    async function deleteWorkflow(id) {
-      if (!confirm("Delete this workflow?")) return;
-      await fetch(`/api/workflows/${id}`, { method: "DELETE" });
-      loadWorkflows();
-    }
-
-    // ── TAB SWITCHER ───────────────────────────────────────────
-    function showTab(name) {
-      document.querySelectorAll(".tab-pane").forEach(p => p.classList.add("hidden"));
-      document.querySelectorAll(".tab-btn").forEach(b => {
-        b.classList.remove("border-violet-500", "text-violet-400", "font-semibold");
-        b.classList.add("border-transparent", "text-slate-400");
-      });
-      document.getElementById(`pane-${name}`).classList.remove("hidden");
-      const btn = document.getElementById(`tab-${name}`);
-      btn.classList.add("border-violet-500", "text-violet-400", "font-semibold");
-      btn.classList.remove("border-transparent", "text-slate-400");
-    }
-
-    // ── UI HELPERS ─────────────────────────────────────────────
-    function tile(val, label) {
-      return `<div class="bg-slate-900 rounded-lg p-3 text-center">
-                <p class="text-lg font-bold text-violet-400 leading-tight">${val}</p>
-                <p class="text-xs text-slate-400 mt-0.5">${label}</p>
-              </div>`;
-    }
-
-    function section(title, body) {
-      return `<div class="bg-slate-900 rounded-lg p-3 mb-2">
-                <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">${title}</p>
-                ${body}
-              </div>`;
-    }
-
-    function esc(s) {
-      return String(s ?? "")
-        .replace(/&/g, "&amp;").replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-    }
-
-    function syntaxHighlight(json) {
-      return esc(json).replace(
-        /("(\\u[\dA-Fa-f]{4}|\\[^u]|[^\\"])*"(\s*:)?|-?\d+\.?\d*([eE][+-]?\d+)?|true|false|null)/g,
-        (m) => {
-          let cls = "json-number";
-          if (/^"/.test(m))           cls = /:$/.test(m) ? "json-key" : "json-string";
-          else if (/true|false/.test(m)) cls = "json-bool";
-          else if (/null/.test(m))       cls = "json-null";
-          return `<span class="${cls}">${m}</span>`;
-        }
-      );
-    }
-
-    function setRunning(on) {
-      const btn  = document.getElementById("actionBtn");
-      const icon = document.getElementById("actionBtnIcon");
-      const txt  = document.getElementById("actionBtnText");
-      btn.disabled = on;
-      if (on) { icon.textContent = "⏳"; txt.textContent = "Working — please wait..."; }
-      else    { setMode(currentMode); } // restore correct button text/colour
-    }
-
-    function hideCards() {
-      document.getElementById("resultsCard").classList.add("hidden");
-      document.getElementById("errorCard").classList.add("hidden");
-    }
-
-    function showError(msg) {
-      document.getElementById("errorCard").classList.remove("hidden");
-      document.getElementById("errorMsg").textContent = msg;
-    }
-
-    // ── INIT ───────────────────────────────────────────────────
-    window.onload = loadWorkflows;
-
-    // Enter key support in URL and query fields
-    ["urlInput", "searchQuery", "searchSelector"].forEach(id => {
-      document.getElementById(id)?.addEventListener("keydown", e => {
-        if (e.key === "Enter") startAction();
-      });
-    });
-
-  </script>
-
-  <!-- ═══ LIVE API MODAL ═══════════════════════════════════════
-       Appears when user clicks "🔗 Live API Endpoint" on a workflow card.
-       Shows the callable URL, lets the user test it with any query,
-       and displays the JSON response with syntax highlighting.
-  ════════════════════════════════════════════════════════════ -->
-  <div id="apiModal"
-    class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-    onclick="if(event.target===this) closeApiModal()">
-
-    <div class="bg-slate-800 border border-slate-600 rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl fade-in">
-
-      <!-- Modal header -->
-      <div class="flex items-center justify-between px-5 py-4 border-b border-slate-700">
-        <div>
-          <h2 class="text-base font-bold text-white">🔗 Live API Endpoint</h2>
-          <p id="modalWorkflowName" class="text-xs text-slate-400 mt-0.5"></p>
-        </div>
-        <button onclick="closeApiModal()"
-          class="text-slate-400 hover:text-white text-xl leading-none w-8 h-8 flex items-center justify-center rounded-lg hover:bg-slate-700 transition-colors">
-          ✕
-        </button>
-      </div>
-
-      <!-- Modal body (scrollable) -->
-      <div class="overflow-y-auto p-5 flex flex-col gap-5">
-
-        <!-- Explanation -->
-        <div class="bg-slate-900 rounded-xl p-4 border border-slate-700">
-          <p class="text-xs text-slate-300 leading-relaxed">
-            This is your dynamic, callable API. Any time you (or another app) fetches this URL,
-            a headless robot browser opens in the background, types your query into the search box,
-            waits for the autocomplete dropdown to appear, and returns the results as JSON —
-            all within a few seconds.
-          </p>
-          <p class="text-xs text-slate-500 mt-2">
-            Change the <span class="font-mono text-emerald-400">?q=</span> value to change what you're searching for.
-          </p>
-        </div>
-
-        <!-- URL display + copy -->
-        <div class="flex flex-col gap-2">
-          <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider">Your Live API URL</label>
-          <div class="flex gap-2">
-            <code id="modalApiUrl"
-              class="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2.5 text-xs text-emerald-300 font-mono break-all leading-relaxed">
-            </code>
-            <button onclick="copyApiUrl()"
-              id="copyBtn"
-              class="shrink-0 bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs px-3 py-2 rounded-lg transition-colors font-semibold">
-              Copy
-            </button>
-          </div>
-          <p class="text-xs text-slate-500">
-            💡 Paste this URL directly into your browser, Postman, Excel Power Query, or Python requests.
-          </p>
-        </div>
-
-        <!-- Live tester -->
-        <div class="flex flex-col gap-3">
-          <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider">Test Live Query</label>
-          <div class="flex gap-2">
-            <div class="flex items-center bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 flex-1 gap-1 font-mono text-xs">
-              <span class="text-slate-500 shrink-0">?q=</span>
-              <input id="liveQueryInput" type="text" value="R"
-                placeholder="ROBI"
-                class="flex-1 bg-transparent text-white outline-none placeholder-slate-500" />
-            </div>
-            <button onclick="testLiveQuery()" id="testBtn"
-              class="shrink-0 bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-4 py-2 rounded-lg transition-colors font-bold disabled:opacity-40">
-              ▶ Run Query
-            </button>
-          </div>
-        </div>
-
-        <!-- Response viewer (hidden until a test is run) -->
-        <div id="liveResponseArea" class="hidden flex flex-col gap-3">
-
-          <!-- Summary bar -->
-          <div id="liveResponseSummary"
-            class="flex items-center gap-3 bg-slate-900 rounded-lg px-3 py-2 border border-slate-700">
-          </div>
-
-          <!-- Dropdown items table -->
-          <div id="liveDropdownSection" class="hidden flex flex-col gap-2">
-            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Autocomplete Dropdown Items</p>
-            <div id="liveDropdownTable" class="overflow-x-auto"></div>
-          </div>
-
-          <!-- API calls -->
-          <div id="liveApiSection" class="hidden flex flex-col gap-2">
-            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Intercepted Network API Calls</p>
-            <div id="liveApiCallsView"></div>
-          </div>
-
-          <!-- Raw JSON toggle -->
-          <details class="group">
-            <summary class="text-xs text-slate-400 hover:text-slate-200 cursor-pointer select-none py-1">
-              ▶ Show full raw JSON response
-            </summary>
-            <pre id="liveRawJson"
-              class="mt-2 bg-slate-900 rounded-lg p-3 text-xs overflow-auto max-h-64 leading-relaxed border border-slate-700"></pre>
-          </details>
-        </div>
-
-        <!-- Error display -->
-        <div id="liveErrorArea" class="hidden bg-red-900/30 border border-red-700 rounded-lg p-3">
-          <p class="text-xs text-red-300 font-semibold">Query failed</p>
-          <p id="liveErrorMsg" class="text-xs text-red-400 mt-1"></p>
-        </div>
-
       </div>
     </div>
   </div>
-  <!-- ═══ END MODAL ════════════════════════════════════════════ -->
+</div>
 
-  <script>
-    // ── Modal state ────────────────────────────────────────────
-    let activeWorkflowId = null;
+<!-- PLANS PAGE -->
+<div id="page-plans" class="page">
+  <div style="max-width:1100px;margin:0 auto;padding:60px 20px">
+    <div style="text-align:center;margin-bottom:48px">
+      <h1 style="font-size:34px;font-weight:800;margin-bottom:12px">Choose Your Plan</h1>
+      <p style="color:var(--muted);font-size:15px">Start free. Upgrade when you need more power.</p>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-bottom:36px" class="plans-grid">
+      <!-- Free -->
+      <div class="plan-card">
+        <div style="font-size:36px;margin-bottom:16px">🆓</div>
+        <h2 style="font-size:22px;font-weight:800;margin-bottom:6px">Free</h2>
+        <p style="color:var(--muted);font-size:13px;margin-bottom:24px">Perfect to explore and learn</p>
+        <div style="font-size:40px;font-weight:800;color:var(--primary);margin-bottom:4px">৳0</div>
+        <div style="color:var(--muted);font-size:13px;margin-bottom:28px">forever free</div>
+        <ul style="list-style:none;margin-bottom:32px;display:flex;flex-direction:column;gap:11px;font-size:14px">
+          <li style="display:flex;gap:10px;color:var(--muted)"><span style="color:var(--success);font-weight:700">✓</span> 5 interactions per day</li>
+          <li style="display:flex;gap:10px;color:var(--muted)"><span style="color:var(--success);font-weight:700">✓</span> Record workflows</li>
+          <li style="display:flex;gap:10px;color:var(--muted)"><span style="color:var(--success);font-weight:700">✓</span> Save unlimited APIs</li>
+          <li style="display:flex;gap:10px;color:#475569"><span>✗</span> Cannot call/run APIs</li>
+          <li style="display:flex;gap:10px;color:#475569"><span>✗</span> Cannot sell on marketplace</li>
+        </ul>
+        <button class="btn btn-outline" style="width:100%" onclick="choosePlan('free')">Start for Free</button>
+      </div>
+      <!-- Monthly -->
+      <div class="plan-card popular">
+        <div style="position:absolute;top:-14px;left:50%;transform:translateX(-50%);background:var(--primary);color:white;padding:5px 20px;border-radius:999px;font-size:12px;font-weight:700;white-space:nowrap">⭐ MOST POPULAR</div>
+        <div style="font-size:36px;margin-bottom:16px">🚀</div>
+        <h2 style="font-size:22px;font-weight:800;margin-bottom:6px">Monthly</h2>
+        <p style="color:var(--muted);font-size:13px;margin-bottom:24px">For active builders</p>
+        <div style="font-size:40px;font-weight:800;color:var(--primary);margin-bottom:4px">৳299</div>
+        <div style="color:var(--muted);font-size:13px;margin-bottom:28px">per month</div>
+        <ul style="list-style:none;margin-bottom:32px;display:flex;flex-direction:column;gap:11px;font-size:14px">
+          <li style="display:flex;gap:10px;color:var(--muted)"><span style="color:var(--success);font-weight:700">✓</span> <strong>500 interactions/month</strong></li>
+          <li style="display:flex;gap:10px;color:var(--muted)"><span style="color:var(--success);font-weight:700">✓</span> Record & run APIs</li>
+          <li style="display:flex;gap:10px;color:var(--muted)"><span style="color:var(--success);font-weight:700">✓</span> Sell on marketplace</li>
+          <li style="display:flex;gap:10px;color:var(--muted)"><span style="color:var(--success);font-weight:700">✓</span> Usage analytics</li>
+          <li style="display:flex;gap:10px;color:var(--muted)"><span style="color:var(--success);font-weight:700">✓</span> Email support</li>
+        </ul>
+        <button class="btn btn-primary" style="width:100%" onclick="choosePlan('monthly')">Start Monthly →</button>
+      </div>
+      <!-- Yearly -->
+      <div class="plan-card best">
+        <div style="position:absolute;top:-14px;left:50%;transform:translateX(-50%);background:#f59e0b;color:white;padding:5px 20px;border-radius:999px;font-size:12px;font-weight:700;white-space:nowrap">🏆 BEST VALUE — SAVE 30%</div>
+        <div style="font-size:36px;margin-bottom:16px">💎</div>
+        <h2 style="font-size:22px;font-weight:800;margin-bottom:6px">Yearly</h2>
+        <p style="color:var(--muted);font-size:13px;margin-bottom:24px">For power users & businesses</p>
+        <div style="font-size:40px;font-weight:800;color:#f59e0b;margin-bottom:4px">৳2,499</div>
+        <div style="color:var(--muted);font-size:13px;margin-bottom:28px">per year <span style="color:#f59e0b;font-weight:700">(≈৳208/mo)</span></div>
+        <ul style="list-style:none;margin-bottom:32px;display:flex;flex-direction:column;gap:11px;font-size:14px">
+          <li style="display:flex;gap:10px;color:var(--muted)"><span style="color:var(--success);font-weight:700">✓</span> <strong>Unlimited interactions</strong></li>
+          <li style="display:flex;gap:10px;color:var(--muted)"><span style="color:var(--success);font-weight:700">✓</span> Record & run APIs</li>
+          <li style="display:flex;gap:10px;color:var(--muted)"><span style="color:var(--success);font-weight:700">✓</span> Sell on marketplace</li>
+          <li style="display:flex;gap:10px;color:var(--muted)"><span style="color:var(--success);font-weight:700">✓</span> Priority execution</li>
+          <li style="display:flex;gap:10px;color:var(--muted)"><span style="color:var(--success);font-weight:700">✓</span> Advanced analytics + priority support</li>
+        </ul>
+        <button class="btn" style="width:100%;background:#f59e0b;color:white;font-weight:700" onclick="choosePlan('yearly')">Start Yearly →</button>
+      </div>
+    </div>
+    <p style="text-align:center;color:var(--muted);font-size:13px">All paid plans use bKash Send Money. Plans activate within a few hours of payment confirmation.</p>
+  </div>
+</div>
 
-    // ── OPEN MODAL ─────────────────────────────────────────────
-    function openApiModal(workflowId, workflowName) {
-      activeWorkflowId = workflowId;
-      const url = `${location.origin}/api/live/${workflowId}?q=ROBI`;
+<!-- HOME PAGE -->
+<div id="page-home" class="page">
+  <div style="max-width:1200px;margin:0 auto;padding:36px 20px">
+    <div style="background:linear-gradient(135deg,#1e1b4b,#312e81);border-radius:20px;padding:36px;margin-bottom:28px;position:relative;overflow:hidden">
+      <div style="position:absolute;right:-10px;top:-30px;font-size:140px;opacity:.07;pointer-events:none">⚡</div>
+      <h1 style="font-size:26px;font-weight:800;color:#f1f5f9;margin-bottom:8px">Welcome back, <span id="home-user-name" style="color:#a5b4fc">there</span>! 👋</h1>
+      <p style="color:#94a3b8;font-size:14px;margin-bottom:24px">Ready to automate something? Record a workflow and turn it into an API in minutes.</p>
+      <div style="display:flex;gap:12px;flex-wrap:wrap">
+        <button class="btn btn-primary btn-lg" onclick="showPage('recorder')">🎙️ Record New API</button>
+        <button class="btn" style="background:rgba(255,255,255,.1);color:#a5b4fc;border:1px solid rgba(165,180,252,.3)" class="btn-lg" onclick="showPage('marketplace')">🛍️ Browse Marketplace</button>
+      </div>
+    </div>
+    <!-- Stats -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px" class="stats-grid">
+      <div class="card" style="text-align:center;padding:20px"><div style="font-size:30px;font-weight:800;color:var(--primary)" id="stat-apis">—</div><div style="color:var(--muted);font-size:13px;margin-top:4px">My APIs</div></div>
+      <div class="card" style="text-align:center;padding:20px"><div style="font-size:30px;font-weight:800;color:var(--success)" id="stat-calls">—</div><div style="color:var(--muted);font-size:13px;margin-top:4px">Total Calls</div></div>
+      <div class="card" style="text-align:center;padding:20px"><div style="font-size:30px;font-weight:800;color:#f59e0b" id="stat-plan">—</div><div style="color:var(--muted);font-size:13px;margin-top:4px">Plan</div></div>
+      <div class="card" style="text-align:center;padding:20px"><div style="font-size:30px;font-weight:800;color:#06b6d4" id="stat-usage">—</div><div style="color:var(--muted);font-size:13px;margin-top:4px" id="stat-usage-label">Used Today</div></div>
+    </div>
+    <!-- Usage bar -->
+    <div class="card" style="margin-bottom:28px;padding:20px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-size:14px;font-weight:600">Usage</div>
+        <span id="usage-bar-text" style="font-size:13px;color:var(--muted)"></span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" id="usage-progress" style="width:0%"></div></div>
+      <div style="margin-top:8px;font-size:12px;color:var(--muted)" id="usage-note"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:2fr 1fr;gap:24px">
+      <div>
+        <h2 style="font-size:18px;font-weight:700;margin-bottom:18px">How It Works</h2>
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <div style="display:flex;gap:14px;align-items:flex-start"><div class="step-dot">1</div><div><div style="font-weight:600;margin-bottom:3px">Click "Record New API"</div><div style="color:var(--muted);font-size:13px;line-height:1.6">A real browser window opens. You're now in recording mode.</div></div></div>
+          <div style="display:flex;gap:14px;align-items:flex-start"><div class="step-dot">2</div><div><div style="font-weight:600;margin-bottom:3px">Do your task on any website</div><div style="color:var(--muted);font-size:13px;line-height:1.6">Search, fill forms, click buttons — everything is captured automatically.</div></div></div>
+          <div style="display:flex;gap:14px;align-items:flex-start"><div class="step-dot">3</div><div><div style="font-weight:600;margin-bottom:3px">Click "Stop & Save"</div><div style="color:var(--muted);font-size:13px;line-height:1.6">Label which values change each time. Name and save your API.</div></div></div>
+          <div style="display:flex;gap:14px;align-items:flex-start"><div class="step-dot">4</div><div><div style="font-weight:600;margin-bottom:3px">Your API is ready!</div><div style="color:var(--muted);font-size:13px;line-height:1.6">Run it with new inputs, or sell it to others on the marketplace.</div></div></div>
+        </div>
+      </div>
+      <div>
+        <h2 style="font-size:18px;font-weight:700;margin-bottom:18px">FAQ</h2>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div class="card" style="padding:14px;cursor:pointer" onclick="this.querySelector('.fa').style.display=this.querySelector('.fa').style.display==='none'?'block':'none'">
+            <div style="font-weight:600;font-size:13px">What is an interaction?</div>
+            <div class="fa" style="display:none;margin-top:8px;color:var(--muted);font-size:12px;line-height:1.6">Every time you record a workflow or run an API counts as 1 interaction.</div>
+          </div>
+          <div class="card" style="padding:14px;cursor:pointer" onclick="this.querySelector('.fa').style.display=this.querySelector('.fa').style.display==='none'?'block':'none'">
+            <div style="font-weight:600;font-size:13px">What websites can I record?</div>
+            <div class="fa" style="display:none;margin-top:8px;color:var(--muted);font-size:12px;line-height:1.6">Any website — DSE, IMDB, booking sites, Google Forms, airline ticketing, and more.</div>
+          </div>
+          <div class="card" style="padding:14px;cursor:pointer" onclick="this.querySelector('.fa').style.display=this.querySelector('.fa').style.display==='none'?'block':'none'">
+            <div style="font-weight:600;font-size:13px">How do I pay?</div>
+            <div class="fa" style="display:none;margin-top:8px;color:var(--muted);font-size:12px;line-height:1.6">Send money via bKash to <strong>01620888131</strong>. We verify and activate within hours.</div>
+          </div>
+          <div class="card" style="padding:14px;cursor:pointer" onclick="this.querySelector('.fa').style.display=this.querySelector('.fa').style.display==='none'?'block':'none'">
+            <div style="font-weight:600;font-size:13px">Can I sell my APIs?</div>
+            <div class="fa" style="display:none;margin-top:8px;color:var(--muted);font-size:12px;line-height:1.6">Yes! On paid plans, publish to the marketplace and set your own price.</div>
+          </div>
+        </div>
+        <button class="btn btn-outline" style="width:100%;margin-top:16px" onclick="showPage('plans')">⬆️ Upgrade Plan</button>
+      </div>
+    </div>
+  </div>
+</div>
 
-      document.getElementById("modalWorkflowName").textContent = workflowName;
-      document.getElementById("modalApiUrl").textContent = url;
-      document.getElementById("liveQueryInput").value = "R";
-      document.getElementById("liveResponseArea").classList.add("hidden");
-      document.getElementById("liveErrorArea").classList.add("hidden");
-      document.getElementById("apiModal").classList.remove("hidden");
-      document.body.style.overflow = "hidden"; // prevent background scroll
+<!-- RECORDER PAGE -->
+<div id="page-recorder" class="page">
+  <div style="max-width:760px;margin:0 auto;padding:40px 20px">
+    <h1 style="font-size:26px;font-weight:800;margin-bottom:8px">🎙️ Record a New API</h1>
+    <p style="color:var(--muted);margin-bottom:28px;font-size:14px">A browser will open. Go to any website, do your task, then click Stop.</p>
+
+    <div id="rec-start" class="card" style="margin-bottom:20px">
+      <h3 style="font-size:16px;font-weight:700;margin-bottom:18px">Ready to record?</h3>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:22px">
+        <div style="display:flex;gap:12px;align-items:center;padding:14px;background:var(--bg);border-radius:12px;border:1px solid var(--border)"><span style="font-size:20px">1️⃣</span><span style="font-size:13px;color:var(--muted)">Click Start — a browser window opens on your screen</span></div>
+        <div style="display:flex;gap:12px;align-items:center;padding:14px;background:var(--bg);border-radius:12px;border:1px solid var(--border)"><span style="font-size:20px">2️⃣</span><span style="font-size:13px;color:var(--muted)">Type any website URL in the address bar and do your task</span></div>
+        <div style="display:flex;gap:12px;align-items:center;padding:14px;background:var(--bg);border-radius:12px;border:1px solid var(--border)"><span style="font-size:20px">3️⃣</span><span style="font-size:13px;color:var(--muted)">Click the red ⏹ "Stop & Save" button in the browser toolbar when done</span></div>
+      </div>
+      <button class="btn btn-primary btn-lg" onclick="startRecording()" id="start-rec-btn" style="display:flex;align-items:center;gap:10px">
+        <span class="rec-pulse"></span> Start Recording
+      </button>
+    </div>
+
+    <div id="rec-progress" style="display:none" class="card" style="margin-bottom:20px">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+        <span class="rec-pulse"></span>
+        <div style="font-size:18px;font-weight:700">Recording in progress...</div>
+      </div>
+      <p style="color:var(--muted);font-size:13px;margin-bottom:20px">The browser window is open. Do your task there, then come back here to stop.</p>
+      <div style="background:var(--bg);border-radius:12px;padding:24px;margin-bottom:20px;text-align:center;border:1px solid var(--border)">
+        <div style="font-size:52px;font-weight:800;color:var(--primary)" id="rec-count">0</div>
+        <div style="color:var(--muted);font-size:14px;margin-top:4px">actions recorded</div>
+      </div>
+      <button class="btn btn-danger btn-lg" onclick="stopRecording()" style="width:100%">⏹ Stop Recording & Review Steps</button>
+    </div>
+
+    <div id="rec-review" style="display:none">
+      <div class="card" style="margin-bottom:20px">
+        <h3 style="font-size:17px;font-weight:700;margin-bottom:8px">✅ Recording Complete!</h3>
+        <p style="color:var(--muted);font-size:13px;margin-bottom:18px">For each form field you filled, choose: <strong style="color:var(--primary)">Variable</strong> (user types this each time) or <strong style="color:var(--success)">Constant</strong> (always the same).</p>
+        <div id="steps-list" style="display:flex;flex-direction:column;gap:10px"></div>
+      </div>
+      <div class="card">
+        <h3 style="font-size:15px;font-weight:700;margin-bottom:18px">Name & Save Your API</h3>
+        <div style="margin-bottom:14px"><label class="label">API Name *</label><input class="input" id="api-name" placeholder="e.g. DSE Stock Lookup, Netflix Search, Hotel Booking"></div>
+        <div style="margin-bottom:22px"><label class="label">Description (optional)</label><textarea class="input" id="api-description" rows="2" placeholder="What does this API do? Who might find it useful?"></textarea></div>
+        <div style="display:flex;gap:12px">
+          <button class="btn btn-primary btn-lg" onclick="saveWorkflow()" style="flex:1">💾 Save My API</button>
+          <button class="btn btn-ghost" onclick="resetRecorder()">Discard</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="rec-success" style="display:none" class="card" style="text-align:center;padding:52px">
+      <div style="font-size:70px;margin-bottom:16px">🎉</div>
+      <h2 style="font-size:24px;font-weight:800;margin-bottom:10px">Your API is Ready!</h2>
+      <p style="color:var(--muted);margin-bottom:28px;font-size:14px">Go to My APIs to run it, edit it, or publish it to the marketplace.</p>
+      <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+        <button class="btn btn-primary btn-lg" onclick="showPage('my-apis')">📦 View My APIs</button>
+        <button class="btn btn-outline btn-lg" onclick="resetRecorder()">Record Another</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MY APIS PAGE -->
+<div id="page-my-apis" class="page">
+  <div style="max-width:1200px;margin:0 auto;padding:36px 20px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:28px;flex-wrap:wrap;gap:12px">
+      <div><h1 style="font-size:26px;font-weight:800;margin-bottom:4px">📦 My APIs</h1><p style="color:var(--muted);font-size:13px">Your automation APIs</p></div>
+      <button class="btn btn-primary" onclick="showPage('recorder')">+ Record New API</button>
+    </div>
+    <div id="my-apis-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:18px"></div>
+  </div>
+</div>
+
+<!-- MARKETPLACE PAGE -->
+<div id="page-marketplace" class="page">
+  <div style="max-width:1200px;margin:0 auto;padding:36px 20px">
+    <div style="margin-bottom:28px"><h1 style="font-size:26px;font-weight:800;margin-bottom:4px">🛍️ API Marketplace</h1><p style="color:var(--muted);font-size:13px">APIs built by the community</p></div>
+    <div id="marketplace-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:18px">
+      <div style="text-align:center;padding:60px;color:var(--muted);grid-column:1/-1"><div style="font-size:40px;margin-bottom:12px">⏳</div><div>Loading...</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- PAYMENT PAGE -->
+<div id="page-payment" class="page">
+  <div style="max-width:540px;margin:0 auto;padding:40px 20px">
+    <button class="btn btn-ghost" onclick="showPage('plans')" style="margin-bottom:20px;font-size:14px">← Back to Plans</button>
+    <div class="card">
+      <h1 style="font-size:22px;font-weight:800;margin-bottom:6px">💳 Pay with bKash</h1>
+      <p style="color:var(--muted);font-size:13px;margin-bottom:24px">Follow the steps below. Your plan will be activated within a few hours.</p>
+      <div id="payment-plan-info" style="background:rgba(99,102,241,.1);border:1px solid var(--primary);border-radius:12px;padding:18px;margin-bottom:24px">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:4px">You are subscribing to</div>
+        <div style="font-size:18px;font-weight:800;color:var(--primary)" id="pay-plan-name"></div>
+        <div style="font-size:30px;font-weight:800;margin-top:4px" id="pay-plan-price"></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:16px;margin-bottom:24px">
+        <div style="display:flex;gap:14px"><div class="step-dot">1</div><div><div style="font-weight:600;font-size:14px;margin-bottom:4px">Open your bKash app</div><div style="color:var(--muted);font-size:13px">Tap on <strong>"Send Money"</strong></div></div></div>
+        <div style="display:flex;gap:14px"><div class="step-dot">2</div><div style="flex:1"><div style="font-weight:600;font-size:14px;margin-bottom:6px">Send to this number</div><div style="background:var(--bg);border:2px solid var(--primary);border-radius:10px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between"><span style="font-size:20px;font-weight:800;color:var(--primary)">01620888131</span><button class="btn btn-ghost" style="font-size:12px;padding:4px 10px" onclick="copyText('01620888131','bKash number')">Copy</button></div></div></div>
+        <div style="display:flex;gap:14px"><div class="step-dot">3</div><div><div style="font-weight:600;font-size:14px;margin-bottom:4px">Send exactly <span id="pay-amount-text" style="color:var(--primary)"></span></div><div style="color:var(--muted);font-size:13px">Reference/note: <strong>ShadmansAPI</strong></div></div></div>
+        <div style="display:flex;gap:14px"><div class="step-dot">4</div><div><div style="font-weight:600;font-size:14px;margin-bottom:4px">Fill in your details below</div><div style="color:var(--muted);font-size:13px">We verify and activate your plan</div></div></div>
+      </div>
+      <div style="margin-bottom:14px"><label class="label">Your bKash Number (the number you sent from)</label><input class="input" id="pay-sender" placeholder="01XXXXXXXXX" type="tel"></div>
+      <div style="margin-bottom:22px"><label class="label">Transaction ID</label><input class="input" id="pay-txn" placeholder="e.g. 8K7F9G3H2J"><div style="margin-top:6px;font-size:12px;color:var(--muted)">Find this in your bKash SMS confirmation</div></div>
+      <button class="btn btn-primary btn-lg" style="width:100%" onclick="submitPayment()" id="pay-btn">✅ Submit Payment Request</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADMIN PAGE -->
+<div id="page-admin" class="page">
+  <div style="max-width:960px;margin:0 auto;padding:36px 20px">
+    <h1 style="font-size:26px;font-weight:800;margin-bottom:6px">🛡️ Admin Panel</h1>
+    <p style="color:var(--muted);margin-bottom:24px;font-size:13px">Verify payments and manage users</p>
+    <div style="display:flex;gap:8px;margin-bottom:24px;background:var(--surface);padding:4px;border-radius:10px;border:1px solid var(--border);width:fit-content">
+      <button class="tab-btn active" id="atab-pending" onclick="adminSwitch('pending',this)">Pending</button>
+      <button class="tab-btn" id="atab-all" onclick="adminSwitch('all',this)">All Payments</button>
+    </div>
+    <div id="admin-list" style="display:flex;flex-direction:column;gap:12px"><div style="text-align:center;padding:40px;color:var(--muted)">Loading...</div></div>
+  </div>
+</div>
+
+<!-- SETTINGS PAGE -->
+<div id="page-settings" class="page">
+  <div style="max-width:560px;margin:0 auto;padding:40px 20px">
+    <h1 style="font-size:26px;font-weight:800;margin-bottom:28px">⚙️ Profile & Settings</h1>
+    <div class="card" style="margin-bottom:16px">
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:22px">
+        <div id="settings-avatar" style="width:60px;height:60px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#8b5cf6);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:white;overflow:hidden;flex-shrink:0">?</div>
+        <div><div style="font-size:19px;font-weight:700" id="settings-name">—</div><div style="color:var(--muted);font-size:14px" id="settings-email">—</div><div id="settings-plan-badge" style="margin-top:6px"></div></div>
+      </div>
+      <div style="border-top:1px solid var(--border);padding-top:18px">
+        <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:14px"><span style="color:var(--muted)">Plan expires</span><span id="settings-expires" style="font-weight:600">—</span></div>
+        <button class="btn btn-outline" style="width:100%" onclick="showPage('plans')">⬆️ Upgrade Plan</button>
+      </div>
+    </div>
+    <div class="card">
+      <h3 style="font-weight:700;margin-bottom:16px;font-size:15px">Appearance</h3>
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:14px">Theme</span>
+        <button class="btn btn-outline" onclick="toggleTheme()" id="settings-theme-btn" style="font-size:13px">🌙 Dark Mode</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- EDIT API MODAL -->
+<div id="modal-edit" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal('modal-edit')">
+  <div class="modal">
+    <h2 style="font-size:19px;font-weight:700;margin-bottom:18px">✏️ Edit API</h2>
+    <input type="hidden" id="edit-id">
+    <div style="margin-bottom:14px"><label class="label">API Name</label><input class="input" id="edit-name"></div>
+    <div style="margin-bottom:14px"><label class="label">Description</label><textarea class="input" id="edit-desc" rows="2"></textarea></div>
+    <div style="margin-bottom:14px">
+      <label class="label">List on Marketplace?</label>
+      <div style="display:flex;gap:20px;margin-top:8px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px"><input type="radio" name="pub" value="1" id="pub-yes" onchange="document.getElementById('mkt-fields').style.display=''"> Yes, publish it</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px"><input type="radio" name="pub" value="0" id="pub-no" checked onchange="document.getElementById('mkt-fields').style.display='none'"> Keep private</label>
+      </div>
+    </div>
+    <div id="mkt-fields" style="display:none">
+      <div style="margin-bottom:14px"><label class="label">Price (৳ BDT, 0 = free)</label><input class="input" type="number" id="edit-price" min="0" placeholder="0"></div>
+      <div style="margin-bottom:14px"><label class="label">Tell buyers what this API does</label><textarea class="input" id="edit-price-desc" rows="3" placeholder="What website does it work on? What inputs does it need? What data does it return?"></textarea></div>
+    </div>
+    <div style="display:flex;gap:12px;margin-top:22px">
+      <button class="btn btn-primary" onclick="saveEdit()" style="flex:1">Save Changes</button>
+      <button class="btn btn-ghost" onclick="closeModal('modal-edit')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- RUN API MODAL -->
+<div id="modal-run" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal('modal-run')">
+  <div class="modal">
+    <h2 style="font-size:19px;font-weight:700;margin-bottom:6px">▶️ Run API</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:18px">Fill in the values below, then click Run.</p>
+    <input type="hidden" id="run-id">
+    <div id="run-inputs" style="margin-bottom:18px"></div>
+    <div style="display:flex;gap:12px">
+      <button class="btn btn-primary" onclick="runApi()" style="flex:1" id="run-btn">▶ Run Now</button>
+      <button class="btn btn-ghost" onclick="closeModal('modal-run')">Cancel</button>
+    </div>
+    <div id="run-result" style="display:none;margin-top:18px"></div>
+  </div>
+</div>
+
+<script>
+// ── STATE ────────────────────────────────────────────────────────────────────
+let token = localStorage.getItem('sapiToken');
+let currentUser = null;
+let recId = null, recTimer = null, recSteps = [], selectedPlan = null;
+
+// ── THEME ────────────────────────────────────────────────────────────────────
+function getTheme(){ return localStorage.getItem('sapiTheme')||'dark'; }
+function applyTheme(t){
+  document.documentElement.setAttribute('data-theme',t);
+  const dark = t==='dark';
+  ['theme-btn'].forEach(id=>{ const b=document.getElementById(id); if(b) b.textContent=dark?'🌙':'☀️'; });
+  ['auth-theme-btn'].forEach(id=>{ const b=document.getElementById(id); if(b) b.textContent=dark?'🌙 Switch to Light Mode':'☀️ Switch to Dark Mode'; });
+  ['settings-theme-btn'].forEach(id=>{ const b=document.getElementById(id); if(b) b.textContent=dark?'🌙 Dark Mode':'☀️ Light Mode'; });
+}
+function toggleTheme(){ const t=getTheme()==='dark'?'light':'dark'; localStorage.setItem('sapiTheme',t); applyTheme(t); }
+applyTheme(getTheme());
+
+// ── API CALL ──────────────────────────────────────────────────────────────────
+async function api(method, path, body){
+  const opts={method,headers:{'Content-Type':'application/json'}};
+  if(token) opts.headers['Authorization']='Bearer '+token;
+  if(body)  opts.body=JSON.stringify(body);
+  const res=await fetch(path,opts);
+  const data=await res.json().catch(()=>({}));
+  return {ok:res.ok,status:res.status,data};
+}
+
+// ── TOAST ─────────────────────────────────────────────────────────────────────
+function toast(msg,type='info',ms=4500){
+  const t=document.createElement('div');
+  t.className=`toast toast-${type}`;
+  t.textContent=msg;
+  document.body.appendChild(t);
+  setTimeout(()=>{ t.style.animation='slideIn .3s ease reverse'; setTimeout(()=>t.remove(),300); },ms);
+}
+
+// ── NAVIGATION ────────────────────────────────────────────────────────────────
+function showPage(name){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  const pg=document.getElementById('page-'+name);
+  if(pg) pg.classList.add('active');
+  document.querySelectorAll('.nav-link').forEach(l=>l.classList.remove('active'));
+  const nl=document.querySelector(`.nav-link[onclick*="'${name}'"]`);
+  if(nl) nl.classList.add('active');
+  window.scrollTo(0,0);
+  if(name==='home')        loadHome();
+  if(name==='my-apis')     loadMyApis();
+  if(name==='marketplace') loadMarketplace();
+  if(name==='admin')       loadAdmin();
+  if(name==='settings')    loadSettings();
+}
+
+// ── AUTH ─────────────────────────────────────────────────────────────────────
+function switchAuthTab(tab){
+  document.getElementById('login-form').style.display  =tab==='login' ?'':'none';
+  document.getElementById('signup-form').style.display =tab==='signup'?'':'none';
+  document.getElementById('tab-login').classList.toggle('active',tab==='login');
+  document.getElementById('tab-signup').classList.toggle('active',tab==='signup');
+}
+
+async function handleLogin(e){
+  e.preventDefault();
+  const btn=document.getElementById('login-btn');
+  btn.textContent='Signing in…'; btn.disabled=true;
+  const r=await api('POST','/api/auth/login',{email:document.getElementById('login-email').value,password:document.getElementById('login-password').value});
+  btn.textContent='Sign In →'; btn.disabled=false;
+  if(!r.ok) return toast(r.data.error,'error');
+  token=r.data.token; localStorage.setItem('sapiToken',token);
+  await afterLogin(r.data.user);
+}
+
+async function handleSignup(e){
+  e.preventDefault();
+  const btn=document.getElementById('signup-btn');
+  btn.textContent='Creating…'; btn.disabled=true;
+  const r=await api('POST','/api/auth/register',{name:document.getElementById('signup-name').value,email:document.getElementById('signup-email').value,password:document.getElementById('signup-password').value});
+  btn.textContent='Create Account →'; btn.disabled=false;
+  if(!r.ok) return toast(r.data.error,'error');
+  toast(r.data.message,'success',7000);
+  switchAuthTab('login');
+}
+
+async function afterLogin(user){
+  currentUser=user;
+  document.getElementById('main-nav').style.display='';
+  const av=document.getElementById('nav-avatar');
+  if(user.avatar) av.innerHTML=`<img src="${user.avatar}" style="width:100%;height:100%;object-fit:cover">`;
+  else av.textContent=(user.name||'U')[0].toUpperCase();
+  document.getElementById('nav-user-name').textContent=user.name;
+  document.getElementById('nav-plan-badge').innerHTML=planBadge(user.plan);
+  document.getElementById('nav-user-info').style.display='';
+  if(user.email==='shadmanshadidzim3@gmail.com') document.getElementById('admin-nav-link').style.display='';
+  if(!user.has_seen_plans) showPage('plans');
+  else showPage('home');
+}
+
+function logout(){
+  token=null; currentUser=null;
+  localStorage.removeItem('sapiToken');
+  document.getElementById('main-nav').style.display='none';
+  showPage('auth');
+}
+
+function planBadge(plan){
+  const cls={free:'badge-free',monthly:'badge-monthly',yearly:'badge-yearly'};
+  const icons={free:'🆓',monthly:'🚀',yearly:'💎'};
+  return `<span class="badge ${cls[plan]||'badge-free'}">${icons[plan]||''} ${plan}</span>`;
+}
+
+// ── HOME ──────────────────────────────────────────────────────────────────────
+async function loadHome(){
+  if(!currentUser) return;
+  const r=await api('GET','/api/auth/me');
+  if(!r.ok) return;
+  const u=r.data; currentUser=u;
+  document.getElementById('home-user-name').textContent=u.name.split(' ')[0];
+  document.getElementById('stat-apis').textContent=u.stats.apiCount;
+  document.getElementById('stat-calls').textContent=u.stats.totalCalls;
+  document.getElementById('stat-plan').textContent=u.plan.charAt(0).toUpperCase()+u.plan.slice(1);
+  if(u.plan==='free'){
+    document.getElementById('stat-usage').textContent=`${u.usage.today}/5`;
+    document.getElementById('stat-usage-label').textContent='Used Today';
+    document.getElementById('usage-bar-text').textContent=`${u.usage.today} of 5 daily interactions used`;
+    document.getElementById('usage-progress').style.width=Math.min(u.usage.today/5*100,100)+'%';
+    document.getElementById('usage-note').textContent='Free plan resets every 24 hours. Upgrade for more.';
+  } else if(u.plan==='monthly'){
+    document.getElementById('stat-usage').textContent=`${u.usage.month}/500`;
+    document.getElementById('stat-usage-label').textContent='This Month';
+    document.getElementById('usage-bar-text').textContent=`${u.usage.month} of 500 monthly interactions`;
+    document.getElementById('usage-progress').style.width=Math.min(u.usage.month/500*100,100)+'%';
+    document.getElementById('usage-note').textContent='Monthly plan resets on the 1st of each month.';
+  } else {
+    document.getElementById('stat-usage').textContent='∞';
+    document.getElementById('stat-usage-label').textContent='Unlimited';
+    document.getElementById('usage-bar-text').textContent='Unlimited interactions on Yearly plan';
+    document.getElementById('usage-progress').style.width='8%';
+    document.getElementById('usage-note').textContent='Enjoy unlimited automation!';
+  }
+}
+
+// ── PLANS ─────────────────────────────────────────────────────────────────────
+async function choosePlan(plan){
+  await api('POST','/api/auth/mark-plans-seen');
+  if(currentUser) currentUser.has_seen_plans=1;
+  if(plan==='free'){ toast('You are on the Free plan — enjoy building!','success'); showPage('home'); return; }
+  selectedPlan=plan;
+  const prices={monthly:299,yearly:2499};
+  document.getElementById('pay-plan-name').textContent=plan==='monthly'?'🚀 Monthly Plan':'💎 Yearly Plan';
+  document.getElementById('pay-plan-price').textContent='৳'+prices[plan]+(plan==='monthly'?'/month':'/year');
+  document.getElementById('pay-amount-text').textContent='৳'+prices[plan];
+  showPage('payment');
+}
+
+async function submitPayment(){
+  const sender=document.getElementById('pay-sender').value.trim();
+  const txn=document.getElementById('pay-txn').value.trim();
+  if(!sender||!txn) return toast('Please fill in your bKash number and Transaction ID.','error');
+  const btn=document.getElementById('pay-btn');
+  btn.textContent='Submitting…'; btn.disabled=true;
+  const r=await api('POST','/api/payment/initiate',{plan:selectedPlan,bkash_sender:sender,bkash_transaction_id:txn});
+  btn.textContent='✅ Submit Payment Request'; btn.disabled=false;
+  if(!r.ok) return toast(r.data.error,'error');
+  toast(r.data.message,'success',7000);
+  document.getElementById('pay-sender').value='';
+  document.getElementById('pay-txn').value='';
+  showPage('home');
+}
+
+function copyText(txt, label){
+  navigator.clipboard.writeText(txt).then(()=>toast(`${label} copied!`,'success')).catch(()=>toast('Copy failed — do it manually','error'));
+}
+
+// ── RECORDER ─────────────────────────────────────────────────────────────────
+async function startRecording(){
+  const btn=document.getElementById('start-rec-btn');
+  btn.disabled=true; btn.innerHTML='<span class="rec-pulse"></span> Opening browser…';
+  const r=await api('POST','/api/recording/start');
+  btn.disabled=false; btn.innerHTML='<span class="rec-pulse"></span> Start Recording';
+  if(!r.ok) return toast(r.data.error||'Could not start recording.','error');
+  recId=r.data.sessionId;
+  document.getElementById('rec-start').style.display='none';
+  document.getElementById('rec-progress').style.display='';
+  recTimer=setInterval(pollRec,1600);
+}
+
+async function pollRec(){
+  if(!recId) return;
+  const r=await api('GET','/api/recording/status/'+recId);
+  if(!r.ok) return;
+  if(r.data.stopped){
+    clearInterval(recTimer);
+    recSteps=r.data.steps||[];
+    recId=null;
+    showReview(recSteps);
+    return;
+  }
+  document.getElementById('rec-count').textContent=r.data.stepCount||0;
+}
+
+async function stopRecording(){
+  clearInterval(recTimer);
+  const r=await api('POST','/api/recording/stop/'+recId);
+  recId=null;
+  if(!r.ok) return toast(r.data.error,'error');
+  recSteps=r.data.steps||[];
+  showReview(recSteps);
+}
+
+function showReview(steps){
+  document.getElementById('rec-progress').style.display='none';
+  document.getElementById('rec-review').style.display='';
+  const list=document.getElementById('steps-list');
+  list.innerHTML='';
+  const fills=steps.filter(s=>s.type==='fill');
+  const nav=steps.filter(s=>s.type==='navigate').length;
+  const clicks=steps.filter(s=>s.type==='click').length;
+  if(!fills.length){
+    list.innerHTML=`<div style="color:var(--muted);font-size:13px;padding:14px;background:var(--bg);border-radius:10px;line-height:1.6">
+      Recorded <strong>${steps.length} actions</strong>: ${nav} page visit${nav!==1?'s':''}, ${clicks} click${clicks!==1?'s':''}.
+      No form fields filled — this API will replay the exact same clicks each time.
+    </div>`;
+    return;
+  }
+  list.innerHTML=`<div style="font-size:12px;color:var(--muted);margin-bottom:8px">Recorded ${steps.length} total actions including ${fills.length} form field${fills.length!==1?'s':''}. Label each one:</div>`;
+  fills.forEach((step,i)=>{
+    const realIdx=steps.indexOf(step);
+    const d=document.createElement('div');
+    d.style.cssText='background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:16px;';
+    d.setAttribute('data-idx',realIdx);
+    d.innerHTML=`
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+        <div><div style="font-weight:600;font-size:14px">${step.label||step.selector}</div><div style="color:var(--muted);font-size:12px;margin-top:2px">You typed: <strong>"${step.value}"</strong></div></div>
+        <div style="display:flex;gap:14px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;color:var(--primary);white-space:nowrap"><input type="radio" name="st-${i}" value="variable" checked> Variable</label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;color:var(--success);white-space:nowrap"><input type="radio" name="st-${i}" value="constant"> Constant</label>
+        </div>
+      </div>
+      <input class="input" id="vname-${i}" placeholder="Give it a name (e.g. Search Term, Hotel City, Date)" value="${step.label||'input_'+i}" style="font-size:13px">
+    `;
+    list.appendChild(d);
+  });
+}
+
+async function saveWorkflow(){
+  const name=document.getElementById('api-name').value.trim();
+  const desc=document.getElementById('api-description').value.trim();
+  if(!name) return toast('Please give your API a name.','error');
+  const fills=recSteps.filter(s=>s.type==='fill');
+  const variables=[]; const constants={};
+  fills.forEach((step,i)=>{
+    const type=document.querySelector(`[name="st-${i}"]:checked`)?.value||'variable';
+    const vname=document.getElementById(`vname-${i}`)?.value.trim()||`input_${i}`;
+    const idx=recSteps.indexOf(step);
+    if(type==='variable'){
+      recSteps[idx].isVariable=true; recSteps[idx].variableName=vname;
+      variables.push({name:vname,label:step.label||vname,defaultValue:step.value});
+    } else {
+      recSteps[idx].isVariable=false;
+      constants[vname]=step.value;
     }
+  });
+  const r=await api('POST','/api/workflows',{name,description:desc,url:recSteps.find(s=>s.type==='navigate')?.url||'',steps:recSteps,variables,constants});
+  if(!r.ok) return toast(r.data.error,'error');
+  toast('API saved successfully!','success');
+  document.getElementById('rec-review').style.display='none';
+  document.getElementById('rec-success').style.display='';
+  recSteps=[];
+}
 
-    function closeApiModal() {
-      document.getElementById("apiModal").classList.add("hidden");
-      document.body.style.overflow = "";
-      activeWorkflowId = null;
-    }
+function resetRecorder(){
+  clearInterval(recTimer); recId=null; recSteps=[];
+  document.getElementById('rec-start').style.display='';
+  document.getElementById('rec-progress').style.display='none';
+  document.getElementById('rec-review').style.display='none';
+  document.getElementById('rec-success').style.display='none';
+  document.getElementById('api-name').value='';
+  document.getElementById('api-description').value='';
+}
 
-    // ── COPY URL ───────────────────────────────────────────────
-    function copyApiUrl() {
-      const url = document.getElementById("modalApiUrl").textContent.trim();
-      navigator.clipboard.writeText(url).then(() => {
-        const btn = document.getElementById("copyBtn");
-        btn.textContent = "Copied ✓";
-        btn.classList.add("bg-emerald-700");
-        setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("bg-emerald-700"); }, 2000);
-      });
-    }
+// ── MY APIS ───────────────────────────────────────────────────────────────────
+async function loadMyApis(){
+  const r=await api('GET','/api/workflows');
+  const grid=document.getElementById('my-apis-grid');
+  grid.innerHTML='';
+  if(!r.ok||!r.data.length){
+    grid.innerHTML=`<div style="text-align:center;padding:60px;color:var(--muted);grid-column:1/-1"><div style="font-size:48px;margin-bottom:14px">📭</div><div style="font-size:18px;font-weight:600;margin-bottom:8px">No APIs yet</div><div style="margin-bottom:20px;font-size:14px">Record your first workflow!</div><button class="btn btn-primary" onclick="showPage('recorder')">🎙️ Record First API</button></div>`;
+    return;
+  }
+  r.data.forEach(w=>grid.appendChild(buildCard(w)));
+}
 
-    // ── TEST LIVE QUERY ────────────────────────────────────────
-    // Calls /api/live/:id?q=<term> and renders the result.
-    async function testLiveQuery() {
-      const q   = document.getElementById("liveQueryInput").value.trim();
-      const btn = document.getElementById("testBtn");
-      if (!q || !activeWorkflowId) return;
+function buildCard(w){
+  const div=document.createElement('div');
+  div.className='api-card';
+  const varChips=(w.variables||[]).map(v=>`<span style="background:rgba(99,102,241,.12);color:var(--primary);padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600">${v.label||v.name}</span>`).join('');
+  div.innerHTML=`
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+      <div style="font-size:15px;font-weight:700;line-height:1.3">${w.name}</div>
+      ${w.is_public?'<span style="background:rgba(16,185,129,.12);color:#10b981;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:600;white-space:nowrap">🌐 Public</span>':'<span style="background:var(--bg);color:var(--muted);padding:3px 10px;border-radius:999px;font-size:11px;white-space:nowrap">🔒 Private</span>'}
+    </div>
+    ${w.description?`<p style="color:var(--muted);font-size:13px;margin-bottom:10px;line-height:1.5">${w.description}</p>`:''}
+    ${w.url?`<div style="color:var(--muted);font-size:11px;margin-bottom:8px;word-break:break-all">🌐 ${w.url}</div>`:''}
+    ${varChips?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px">${varChips}</div>`:''}
+    <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:14px">
+      <span>▶ ${w.call_count||0} calls · ${w.steps?.length||0} steps</span>
+      <span>${new Date(w.created_at).toLocaleDateString()}</span>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-primary" style="font-size:13px;padding:7px 14px" onclick='openRun("${w.id}",${JSON.stringify(w.variables||[])})'>▶ Run</button>
+      <button class="btn btn-outline" style="font-size:13px;padding:7px 14px" onclick='openEdit(${JSON.stringify({id:w.id,name:w.name,description:w.description,is_public:w.is_public,price:w.price,price_description:w.price_description})})'>✏️ Edit</button>
+      <button class="btn btn-danger" style="font-size:13px;padding:7px 14px" onclick="delApi('${w.id}')">🗑</button>
+    </div>
+  `;
+  return div;
+}
 
-      // Update the URL display live as the query changes
-      document.getElementById("modalApiUrl").textContent =
-        `${location.origin}/api/live/${activeWorkflowId}?q=${encodeURIComponent(q)}`;
+async function delApi(id){
+  if(!confirm('Delete this API? This cannot be undone.')) return;
+  const r=await api('DELETE','/api/workflows/'+id);
+  if(!r.ok) return toast(r.data.error,'error');
+  toast('API deleted.','info'); loadMyApis();
+}
 
-      // Loading state
-      btn.disabled = true;
-      btn.textContent = "⏳ Running...";
-      document.getElementById("liveResponseArea").classList.add("hidden");
-      document.getElementById("liveErrorArea").classList.add("hidden");
+let _editData={};
+function openEdit(w){
+  _editData=w;
+  document.getElementById('edit-id').value=w.id;
+  document.getElementById('edit-name').value=w.name;
+  document.getElementById('edit-desc').value=w.description||'';
+  document.getElementById('edit-price').value=w.price||0;
+  document.getElementById('edit-price-desc').value=w.price_description||'';
+  document.getElementById('pub-yes').checked=w.is_public==1;
+  document.getElementById('pub-no').checked=w.is_public!=1;
+  document.getElementById('mkt-fields').style.display=w.is_public?'':'none';
+  openModal('modal-edit');
+}
 
-      try {
-        const res  = await fetch(`/api/live/${activeWorkflowId}?q=${encodeURIComponent(q)}`);
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error || "Unknown error");
-        renderLiveResponse(json);
-      } catch (err) {
-        document.getElementById("liveErrorArea").classList.remove("hidden");
-        document.getElementById("liveErrorMsg").textContent = err.message;
-      } finally {
-        btn.disabled = false;
-        btn.textContent = "▶ Run Query";
-      }
-    }
+async function saveEdit(){
+  const id=document.getElementById('edit-id').value;
+  const r=await api('PUT','/api/workflows/'+id,{
+    name:document.getElementById('edit-name').value,
+    description:document.getElementById('edit-desc').value,
+    is_public:document.getElementById('pub-yes').checked,
+    price:parseInt(document.getElementById('edit-price').value)||0,
+    price_description:document.getElementById('edit-price-desc').value,
+  });
+  if(!r.ok) return toast(r.data.error,'error');
+  toast('Saved!','success'); closeModal('modal-edit'); loadMyApis();
+}
 
-    // ── RENDER LIVE RESPONSE ───────────────────────────────────
-    function renderLiveResponse(data) {
-      const dropdownItems = data.dropdownItems?.items || [];
-      const apiCalls      = data.capturedApiCalls  || [];
-      const total         = dropdownItems.length + apiCalls.length;
+let _runVars=[];
+function openRun(id,variables){
+  _runVars=variables||[];
+  document.getElementById('run-id').value=id;
+  const inp=document.getElementById('run-inputs');
+  inp.innerHTML='';
+  if(!_runVars.length){
+    inp.innerHTML='<div style="color:var(--muted);font-size:13px;padding:12px;background:var(--bg);border-radius:8px">No variable inputs — this API runs the same way every time.</div>';
+  } else {
+    _runVars.forEach(v=>{
+      inp.innerHTML+=`<div style="margin-bottom:12px"><label class="label">${v.label||v.name}</label><input class="input" id="rv-${v.name}" placeholder="${v.defaultValue||''}" value="${v.defaultValue||''}"></div>`;
+    });
+  }
+  document.getElementById('run-result').style.display='none';
+  openModal('modal-run');
+}
 
-      // Summary bar
-      document.getElementById("liveResponseSummary").innerHTML =
-        `<span class="text-xs text-emerald-400 font-bold">✓ ${total} result${total !== 1 ? "s" : ""} found</span>
-         <span class="text-xs text-slate-500">for query: "<span class="text-white font-semibold">${esc(data.query)}</span>"</span>
-         ${data.dropdownItems?.foundVia
-           ? `<span class="text-xs text-slate-600 ml-auto font-mono truncate">via ${esc(data.dropdownItems.foundVia)}</span>`
-           : ""}`;
+async function runApi(){
+  const id=document.getElementById('run-id').value;
+  const inputs={};
+  _runVars.forEach(v=>{ inputs[v.name]=document.getElementById('rv-'+v.name)?.value||''; });
+  const btn=document.getElementById('run-btn');
+  btn.textContent='Running…'; btn.disabled=true;
+  const r=await api('POST','/api/workflows/'+id+'/call',{inputs});
+  btn.textContent='▶ Run Now'; btn.disabled=false;
+  const res=document.getElementById('run-result');
+  res.style.display='';
+  if(!r.ok){
+    res.innerHTML=`<div style="background:#450a0a;color:#fca5a5;border:1px solid #7f1d1d;border-radius:10px;padding:14px;font-size:13px;line-height:1.5">${r.data.error}</div>${r.data.upgradeRequired?`<button class="btn btn-primary" style="width:100%;margin-top:10px" onclick="closeModal('modal-run');showPage('plans')">⬆️ Upgrade to Run APIs</button>`:''}`;
+    return;
+  }
+  const d=r.data.result;
+  res.innerHTML=`<div style="border-top:1px solid var(--border);padding-top:16px">
+    <div style="font-weight:700;margin-bottom:10px;color:var(--success);font-size:14px">✅ Completed — ${d.url}</div>
+    ${d.title?`<div style="font-size:13px;color:var(--muted);margin-bottom:10px">Page: <strong style="color:var(--text)">${d.title}</strong></div>`:''}
+    ${d.headings?.length?`<div style="margin-bottom:10px">${d.headings.slice(0,3).map(h=>`<div style="font-size:13px;padding:4px 0;border-bottom:1px solid var(--border)">${h}</div>`).join('')}</div>`:''}
+    ${d.tables?.filter(t=>t.rows?.length).slice(0,2).map(t=>`<div style="overflow-x:auto;margin-bottom:8px"><table style="width:100%;border-collapse:collapse;font-size:12px">${t.headers?.length?`<tr>${t.headers.map(h=>`<th style="padding:6px 8px;background:var(--bg);color:var(--muted);text-align:left;border:1px solid var(--border)">${h}</th>`).join('')}</tr>`:''} ${t.rows.slice(0,6).map(row=>`<tr>${row.map(c=>`<td style="padding:6px 8px;border:1px solid var(--border);font-size:12px">${c}</td>`).join('')}</tr>`).join('')}</table></div>`).join('')||''}
+    <details><summary style="font-size:12px;color:var(--muted);cursor:pointer;margin-top:8px">View raw JSON</summary><pre style="background:var(--bg);padding:10px;border-radius:8px;font-size:11px;overflow-x:auto;margin-top:6px;color:var(--muted);max-height:180px;overflow-y:auto">${JSON.stringify(d,null,2)}</pre></details>
+  </div>`;
+}
 
-      // Dropdown items as a clean table
-      const dropdownSec = document.getElementById("liveDropdownSection");
-      if (dropdownItems.length) {
-        dropdownSec.classList.remove("hidden");
-        const rows = dropdownItems.map((it, i) =>
-          `<tr class="${i % 2 === 0 ? "bg-slate-900" : "bg-slate-800/50"}">
-             <td class="px-3 py-1.5 text-xs text-slate-300 font-medium">${esc(it.text)}</td>
-             <td class="px-3 py-1.5 text-xs text-slate-500 font-mono">${it.value ? esc(it.value) : "—"}</td>
-           </tr>`
-        ).join("");
-        document.getElementById("liveDropdownTable").innerHTML =
-          `<table class="w-full border-collapse text-xs">
-             <thead><tr>
-               <th class="px-3 py-1.5 text-left text-slate-400 bg-slate-700 text-xs font-semibold">Result Text</th>
-               <th class="px-3 py-1.5 text-left text-slate-400 bg-slate-700 text-xs font-semibold">Value / ID</th>
-             </tr></thead>
-             <tbody>${rows}</tbody>
-           </table>`;
-      } else {
-        dropdownSec.classList.add("hidden");
-      }
+// ── MARKETPLACE ───────────────────────────────────────────────────────────────
+async function loadMarketplace(){
+  const r=await api('GET','/api/marketplace');
+  const grid=document.getElementById('marketplace-grid');
+  grid.innerHTML='';
+  if(!r.ok||!r.data.length){
+    grid.innerHTML=`<div style="text-align:center;padding:60px;color:var(--muted);grid-column:1/-1"><div style="font-size:48px;margin-bottom:14px">🏪</div><div style="font-size:18px;font-weight:600;margin-bottom:8px">Marketplace is empty</div><div style="font-size:14px">Be the first to publish an API!</div></div>`;
+    return;
+  }
+  r.data.forEach(w=>{
+    const d=document.createElement('div');
+    d.className='api-card';
+    d.innerHTML=`
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+        <div style="font-size:15px;font-weight:700">${w.name}</div>
+        <div style="font-size:20px;font-weight:800;color:${w.price?'var(--warning)':'var(--success)'};white-space:nowrap">${w.price?'৳'+w.price:'Free'}</div>
+      </div>
+      ${w.description?`<p style="color:var(--muted);font-size:13px;margin-bottom:10px;line-height:1.5">${w.description}</p>`:''}
+      ${w.price_description?`<div style="background:var(--bg);border-radius:8px;padding:10px;color:var(--muted);font-size:12px;margin-bottom:10px;line-height:1.5">${w.price_description}</div>`:''}
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
+        <div style="width:26px;height:26px;background:linear-gradient(135deg,#6366f1,#8b5cf6);border-radius:50%;display:flex;align-items:center;justify-content:center;color:white;font-size:11px;font-weight:700">${(w.seller_name||'?')[0]}</div>
+        <span style="font-size:12px;color:var(--muted)">${w.seller_name} · ${w.buyers||0} buyers · ${w.call_count||0} calls</span>
+      </div>
+      <button class="btn btn-primary" style="width:100%;font-size:13px" onclick="buyApi('${w.id}','${w.name}',${w.price||0})">
+        ${w.price?'🛒 Buy for ৳'+w.price:'➕ Add Free to Collection'}
+      </button>
+    `;
+    grid.appendChild(d);
+  });
+}
 
-      // Intercepted API calls
-      const apiSec = document.getElementById("liveApiSection");
-      if (apiCalls.length) {
-        apiSec.classList.remove("hidden");
-        document.getElementById("liveApiCallsView").innerHTML = apiCalls.map(c =>
-          `<div class="mb-3">
-             <p class="text-xs text-violet-300 font-mono break-all mb-1">📡 ${esc(c.endpoint)}</p>
-             <pre class="bg-slate-900 rounded-lg p-2 text-xs overflow-auto max-h-40 border border-slate-700">${syntaxHighlight(JSON.stringify(c.data, null, 2))}</pre>
-           </div>`
-        ).join("");
-      } else {
-        apiSec.classList.add("hidden");
-      }
+async function buyApi(id,name,price){
+  if(price>0){ toast(`To buy "${name}", send ৳${price} to bKash 01620888131 and contact us at shadmanshadidzim3@gmail.com`,'info',8000); return; }
+  const r=await api('POST','/api/marketplace/'+id+'/purchase');
+  if(!r.ok) return toast(r.data.error,'error');
+  toast(r.data.message,'success'); loadMarketplace();
+}
 
-      // Raw JSON
-      document.getElementById("liveRawJson").innerHTML =
-        syntaxHighlight(JSON.stringify(data, null, 2));
+// ── ADMIN ─────────────────────────────────────────────────────────────────────
+let adminFilter='pending';
+function adminSwitch(f,el){
+  adminFilter=f;
+  document.querySelectorAll('#page-admin .tab-btn').forEach(b=>b.classList.remove('active'));
+  if(el) el.classList.add('active');
+  loadAdmin();
+}
 
-      document.getElementById("liveResponseArea").classList.remove("hidden");
-    }
+async function loadAdmin(){
+  const r=await api('GET','/api/admin/payments');
+  if(!r.ok) return;
+  const list=document.getElementById('admin-list');
+  const items=adminFilter==='pending'?r.data.filter(p=>p.status==='pending'):r.data;
+  list.innerHTML='';
+  if(!items.length){
+    list.innerHTML=`<div style="text-align:center;padding:40px;color:var(--muted)">No ${adminFilter==='pending'?'pending ':''}payments.</div>`;
+    return;
+  }
+  items.forEach(p=>{
+    const d=document.createElement('div');
+    d.className='card';
+    d.innerHTML=`
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+        <div><div style="font-weight:700">${p.user_name} <span style="color:var(--muted);font-weight:400;font-size:13px">${p.user_email}</span></div><div style="color:var(--primary);font-weight:700;margin-top:4px">${p.plan} — ৳${p.amount}</div></div>
+        <span style="padding:4px 12px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap;background:${p.status==='pending'?'rgba(245,158,11,.15)':p.status==='approved'?'rgba(16,185,129,.15)':'rgba(239,68,68,.15)'};color:${p.status==='pending'?'#f59e0b':p.status==='approved'?'#10b981':'#ef4444'}">${p.status}</span>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:12px">bKash: <strong style="color:var(--text)">${p.bkash_sender}</strong> · TXN ID: <strong style="color:var(--text)">${p.bkash_transaction_id}</strong> · ${new Date(p.created_at).toLocaleString()}</div>
+      ${p.status==='pending'?`<div style="display:flex;gap:10px"><button class="btn btn-success" onclick="adminAct('${p.id}','approve')" style="flex:1;font-size:13px">✅ Approve & Activate</button><button class="btn btn-danger" onclick="adminAct('${p.id}','reject')" style="flex:1;font-size:13px">❌ Reject</button></div>`:''}
+    `;
+    list.appendChild(d);
+  });
+}
 
-    // Allow pressing Enter in the live query input to trigger the test
-    document.getElementById("liveQueryInput")
-      .addEventListener("keydown", e => { if (e.key === "Enter") testLiveQuery(); });
+async function adminAct(id,action){
+  if(!confirm(action==='approve'?'Approve this payment?':'Reject this payment?')) return;
+  const r=await api('POST',`/api/admin/payments/${id}/${action}`);
+  if(!r.ok) return toast(r.data.error,'error');
+  toast(action==='approve'?'Plan activated! Email sent.':'Payment rejected.', action==='approve'?'success':'info');
+  loadAdmin();
+}
 
-  </script>
+// ── SETTINGS ─────────────────────────────────────────────────────────────────
+function loadSettings(){
+  if(!currentUser) return;
+  const av=document.getElementById('settings-avatar');
+  if(currentUser.avatar) av.innerHTML=`<img src="${currentUser.avatar}" style="width:100%;height:100%;object-fit:cover;border-radius:50%">`;
+  else av.textContent=(currentUser.name||'U')[0].toUpperCase();
+  document.getElementById('settings-name').textContent=currentUser.name;
+  document.getElementById('settings-email').textContent=currentUser.email;
+  document.getElementById('settings-plan-badge').innerHTML=planBadge(currentUser.plan);
+  document.getElementById('settings-expires').textContent=currentUser.plan_expires_at
+    ?new Date(currentUser.plan_expires_at).toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'})
+    :currentUser.plan==='free'?'No expiry (free plan)':'—';
+}
+
+// ── MODALS ────────────────────────────────────────────────────────────────────
+function openModal(id){ document.getElementById(id).style.display='flex'; }
+function closeModal(id){ document.getElementById(id).style.display='none'; }
+
+// ── INIT ──────────────────────────────────────────────────────────────────────
+async function init(){
+  const params=new URLSearchParams(window.location.search);
+  const urlTok=params.get('token');
+  if(urlTok){ token=urlTok; localStorage.setItem('sapiToken',token); window.history.replaceState({},'','/'); }
+  if(params.get('verified')){ toast('Email verified! You can now log in.','success',5000); window.history.replaceState({},'','/'); }
+  if(params.get('error')==='google-failed'){ toast('Google sign-in failed. Try again.','error'); window.history.replaceState({},'','/'); }
+  if(token){
+    const r=await api('GET','/api/auth/me');
+    if(r.ok){ currentUser=r.data; await afterLogin(r.data); }
+    else { token=null; localStorage.removeItem('sapiToken'); }
+  }
+}
+
+init();
+</script>
 </body>
 </html>

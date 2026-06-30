@@ -1,2 +1,4 @@
 node_modules/
 workflows.json
+.env
+*.db
