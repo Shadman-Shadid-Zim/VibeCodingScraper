@@ -8,7 +8,9 @@ const Database       = require('better-sqlite3');
 const bcrypt         = require('bcryptjs');
 const jwt            = require('jsonwebtoken');
 const nodemailer     = require('nodemailer');
-const puppeteer      = require('puppeteer');
+const puppeteer      = require('puppeteer-extra');
+const StealthPlugin  = require('puppeteer-extra-plugin-stealth');
+puppeteer.use(StealthPlugin());
 const { v4: uuidv4 } = require('uuid');
 const path           = require('path');
 const cors           = require('cors');
@@ -478,21 +480,32 @@ app.post('/api/recording/start', requireAuth, checkUsageLimit, async (req, res) 
     await page.evaluate(() => {
       document.body.style.cssText = 'margin:0;background:#0f0f23;display:flex;align-items:center;justify-content:center;min-height:100vh;font-family:Arial,sans-serif;';
       document.body.innerHTML = `
-        <div style="text-align:center;padding:48px;max-width:480px;">
-          <div style="font-size:56px;margin-bottom:16px;">🎙️</div>
-          <h1 style="color:#a5b4fc;font-size:26px;margin:0 0 12px;">Recording Started!</h1>
-          <p style="color:#94a3b8;font-size:15px;line-height:1.6;margin:0 0 24px;">
-            Type any website URL in the address bar above and start doing your task.<br>
-            Every click and form fill is being recorded automatically.
-          </p>
-          <div style="background:#1a1a3e;border:1px solid #312e81;border-radius:10px;padding:16px;color:#64748b;font-size:13px;text-align:left;">
-            <p style="margin:0 0 8px;color:#6366f1;font-weight:bold;">📋 Examples you can try:</p>
-            <p style="margin:4px 0;">• Search a company on <strong style="color:#94a3b8;">dsebd.org</strong></p>
-            <p style="margin:4px 0;">• Search a movie on <strong style="color:#94a3b8;">imdb.com</strong></p>
-            <p style="margin:4px 0;">• Fill a form on any website</p>
-            <p style="margin:4px 0;">• Search for flights or hotels</p>
+        <div style="padding:40px;max-width:560px;width:100%;">
+          <div style="text-align:center;margin-bottom:28px;">
+            <div style="font-size:52px;margin-bottom:12px;">🎙️</div>
+            <h1 style="color:#a5b4fc;font-size:24px;margin:0 0 8px;">Recording Started!</h1>
+            <p style="color:#94a3b8;font-size:14px;line-height:1.6;margin:0;">
+              Type any website URL in the address bar and do your task.<br>
+              Every click and form fill is captured automatically.
+            </p>
           </div>
-          <p style="color:#475569;font-size:12px;margin-top:20px;">When you're done, click the red ⏹ button in the top toolbar.</p>
+
+          <div style="background:#1a1a3e;border:1px solid #312e81;border-radius:12px;padding:18px;margin-bottom:16px;font-size:13px;text-align:left;">
+            <p style="margin:0 0 10px;color:#6366f1;font-weight:bold;font-size:14px;">📋 What to record:</p>
+            <p style="margin:5px 0;color:#94a3b8;">• Search for flights on <strong style="color:#e2e8f0;">skyscanner.net</strong></p>
+            <p style="margin:5px 0;color:#94a3b8;">• Look up a stock on <strong style="color:#e2e8f0;">dsebd.org</strong></p>
+            <p style="margin:5px 0;color:#94a3b8;">• Search a movie on <strong style="color:#e2e8f0;">imdb.com</strong></p>
+            <p style="margin:5px 0;color:#94a3b8;">• Fill any form or do any task on any website</p>
+          </div>
+
+          <div style="background:#1a0a00;border:1px solid #92400e;border-radius:12px;padding:16px;font-size:13px;text-align:left;">
+            <p style="margin:0 0 8px;color:#f59e0b;font-weight:bold;">⚠️ If the website requires login first:</p>
+            <p style="margin:4px 0;color:#d97706;">1. Log in to the website using your <strong>email & password</strong> (not Google Sign-In — Google blocks automated browsers)</p>
+            <p style="margin:4px 0;color:#d97706;">2. Once you are logged in, do your task normally</p>
+            <p style="margin:8px 0 0;color:#92400e;font-size:12px;">Google Sign-In inside this recording browser will not work — it detects automated browsers.</p>
+          </div>
+
+          <p style="color:#475569;font-size:12px;margin-top:16px;text-align:center;">When done, click the red ⏹ Stop & Save button in the top toolbar.</p>
         </div>`;
     });
 

@@ -327,10 +327,31 @@
 <!-- MY APIS PAGE -->
 <div id="page-my-apis" class="page">
   <div style="max-width:1200px;margin:0 auto;padding:36px 20px">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:28px;flex-wrap:wrap;gap:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px">
       <div><h1 style="font-size:26px;font-weight:800;margin-bottom:4px">📦 My APIs</h1><p style="color:var(--muted);font-size:13px">Your automation APIs</p></div>
       <button class="btn btn-primary" onclick="showPage('recorder')">+ Record New API</button>
     </div>
+
+    <!-- How to use guide -->
+    <div style="background:rgba(99,102,241,.07);border:1px solid rgba(99,102,241,.2);border-radius:14px;padding:18px 20px;margin-bottom:24px">
+      <div style="font-weight:700;font-size:14px;color:var(--primary-light);margin-bottom:12px">💡 How to use your APIs</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px" class="how-to-grid">
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <div style="width:28px;height:28px;background:var(--primary);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">1</div>
+          <div style="font-size:13px;color:var(--muted);line-height:1.5"><strong style="color:var(--text)">Click ▶ Run</strong> on any API below. A hidden robot browser will open in the background.</div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <div style="width:28px;height:28px;background:var(--primary);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">2</div>
+          <div style="font-size:13px;color:var(--muted);line-height:1.5"><strong style="color:var(--text)">Change the inputs</strong> — e.g. a different city, date, or search term. The robot uses your new values.</div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <div style="width:28px;height:28px;background:var(--primary);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">3</div>
+          <div style="font-size:13px;color:var(--muted);line-height:1.5"><strong style="color:var(--text)">Get the result</strong> — prices, listings, data extracted from the final page, shown right here.</div>
+        </div>
+      </div>
+    </div>
+    <style>@media(max-width:640px){.how-to-grid{grid-template-columns:1fr!important}}</style>
+
     <div id="my-apis-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:18px"></div>
   </div>
 </div>
@@ -434,9 +455,15 @@
 
 <!-- RUN API MODAL -->
 <div id="modal-run" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal('modal-run')">
-  <div class="modal">
-    <h2 style="font-size:19px;font-weight:700;margin-bottom:6px">▶️ Run API</h2>
-    <p style="color:var(--muted);font-size:13px;margin-bottom:18px">Fill in the values below, then click Run.</p>
+  <div class="modal" style="max-width:600px">
+    <h2 style="font-size:19px;font-weight:700;margin-bottom:4px">▶️ Run API</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:6px" id="run-api-name" style="font-weight:600"></p>
+
+    <!-- How it works tip -->
+    <div style="background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.25);border-radius:10px;padding:12px 14px;margin-bottom:18px;font-size:13px;color:var(--muted);line-height:1.6">
+      💡 <strong style="color:var(--primary-light)">How this works:</strong> A hidden browser will open, replay your recorded steps using the values you enter below, and return the data it finds on the final page. Like a robot doing the task for you.
+    </div>
+
     <input type="hidden" id="run-id">
     <div id="run-inputs" style="margin-bottom:18px"></div>
     <div style="display:flex;gap:12px">
@@ -756,7 +783,7 @@ function buildCard(w){
       <span>${new Date(w.created_at).toLocaleDateString()}</span>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-primary" style="font-size:13px;padding:7px 14px" onclick='openRun("${w.id}",${JSON.stringify(w.variables||[])})'>▶ Run</button>
+      <button class="btn btn-primary" style="font-size:13px;padding:7px 14px" onclick='openRun("${w.id}",${JSON.stringify(w.variables||[])},${JSON.stringify(w.name)})'>▶ Run</button>
       <button class="btn btn-outline" style="font-size:13px;padding:7px 14px" onclick='openEdit(${JSON.stringify({id:w.id,name:w.name,description:w.description,is_public:w.is_public,price:w.price,price_description:w.price_description})})'>✏️ Edit</button>
       <button class="btn btn-danger" style="font-size:13px;padding:7px 14px" onclick="delApi('${w.id}')">🗑</button>
     </div>
@@ -798,17 +825,20 @@ async function saveEdit(){
   toast('Saved!','success'); closeModal('modal-edit'); loadMyApis();
 }
 
-let _runVars=[];
-function openRun(id,variables){
+let _runVars=[], _runApiName='';
+function openRun(id,variables,apiName){
   _runVars=variables||[];
+  _runApiName=apiName||'';
   document.getElementById('run-id').value=id;
+  document.getElementById('run-api-name').textContent=apiName?`"${apiName}"` :'';
   const inp=document.getElementById('run-inputs');
   inp.innerHTML='';
   if(!_runVars.length){
-    inp.innerHTML='<div style="color:var(--muted);font-size:13px;padding:12px;background:var(--bg);border-radius:8px">No variable inputs — this API runs the same way every time.</div>';
+    inp.innerHTML='<div style="color:var(--muted);font-size:13px;padding:12px;background:var(--bg);border-radius:8px;line-height:1.6">No variable inputs — this API runs the exact same steps every time. Click Run to execute it.</div>';
   } else {
+    inp.innerHTML='<div style="font-size:13px;font-weight:600;margin-bottom:12px;color:var(--muted)">Change any values below, then click Run:</div>';
     _runVars.forEach(v=>{
-      inp.innerHTML+=`<div style="margin-bottom:12px"><label class="label">${v.label||v.name}</label><input class="input" id="rv-${v.name}" placeholder="${v.defaultValue||''}" value="${v.defaultValue||''}"></div>`;
+      inp.innerHTML+=`<div style="margin-bottom:12px"><label class="label">${v.label||v.name}</label><input class="input" id="rv-${v.name}" placeholder="e.g. ${v.defaultValue||v.name}" value="${v.defaultValue||''}"></div>`;
     });
   }
   document.getElementById('run-result').style.display='none';
