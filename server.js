@@ -14,20 +14,60 @@ puppeteer.use(StealthPlugin());
 const { v4: uuidv4 } = require('uuid');
 const path           = require('path');
 const cors           = require('cors');
-const Anthropic      = require('@anthropic-ai/sdk');
+// AI provider: Claude Fable 5 (best quality, needs paid ANTHROPIC_API_KEY) when available,
+// otherwise free Groq (llama-3.1-8b-instant). The app works either way.
+const Anthropic = require('@anthropic-ai/sdk');
+const Groq      = require('groq-sdk');
 
-const ai = process.env.ANTHROPIC_API_KEY
+const anthropicAI = process.env.ANTHROPIC_API_KEY
   ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
   : null;
+const groqAI = process.env.GROQ_API_KEY
+  ? new Groq({ apiKey: process.env.GROQ_API_KEY })
+  : null;
+const ai = anthropicAI || groqAI;
+
+// Walk the string character-by-character to extract the first balanced { } block
+function extractBalancedJSON(str) {
+  const start = str.indexOf('{');
+  if (start === -1) return null;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < str.length; i++) {
+    const c = str[i];
+    if (esc) { esc = false; continue; }
+    if (c === '\\' && inStr) { esc = true; continue; }
+    if (c === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (c === '{') depth++;
+    if (c === '}') { if (--depth === 0) return str.slice(start, i + 1); }
+  }
+  return null;
+}
 
 async function askClaude(prompt, maxTokens = 600) {
-  if (!ai) throw new Error('ANTHROPIC_API_KEY not set in .env');
-  const r = await ai.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: maxTokens,
-    messages: [{ role: 'user', content: prompt }],
-  });
-  return r.content[0].text.trim();
+  if (anthropicAI) {
+    const r = await anthropicAI.beta.messages.create({
+      model: 'claude-fable-5',
+      max_tokens: maxTokens,
+      // Fable 5 thinking is always on — no thinking param to set.
+      output_config: { effort: 'low' }, // short structured-extraction calls in a live chat UI; keep latency down
+      betas: ['server-side-fallback-2026-06-01'],
+      fallbacks: [{ model: 'claude-opus-4-8' }],
+      messages: [{ role: 'user', content: prompt }],
+    });
+    if (r.stop_reason === 'refusal') throw new Error('Claude declined to respond to this request.');
+    const textBlock = r.content.find(b => b.type === 'text');
+    return (textBlock?.text || '').trim();
+  }
+  if (groqAI) {
+    const r = await groqAI.chat.completions.create({
+      model: 'llama-3.1-8b-instant',
+      max_tokens: maxTokens,
+      messages: [{ role: 'user', content: prompt }],
+    });
+    return r.choices[0].message.content.trim();
+  }
+  throw new Error('No AI key set — add ANTHROPIC_API_KEY or GROQ_API_KEY to .env');
 }
 
 const app  = express();
@@ -72,7 +112,8 @@ db.exec(`
     price_description TEXT DEFAULT '',
     call_count INTEGER DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    last_run TEXT
+    last_run TEXT,
+    session_cookies TEXT DEFAULT '[]'
   );
   CREATE TABLE IF NOT EXISTS purchases (
     id TEXT PRIMARY KEY,
@@ -94,6 +135,8 @@ db.exec(`
     processed_at TEXT
   );
 `);
+// Safely add session_cookies column if upgrading from an older DB
+try { db.exec('ALTER TABLE workflows ADD COLUMN session_cookies TEXT DEFAULT "[]"'); } catch (_) {}
 
 // ─── EMAIL ────────────────────────────────────────────────────────────────────
 const mailer = nodemailer.createTransport({
@@ -388,6 +431,7 @@ const activeSessions = new Map();
 app.post('/api/recording/start', requireAuth, checkUsageLimit, async (req, res) => {
   const sessionId = uuidv4();
   const steps     = [];
+  let lastNavAt   = Date.now(); // used to give AJAX-loaded widgets time to settle before treating them as user edits
 
   try {
     const browser = await puppeteer.launch({
@@ -447,16 +491,36 @@ app.post('/api/recording/start', requireAuth, checkUsageLimit, async (req, res) 
             if (el.name) return `[name="${el.name}"]`;
             const tag = el.tagName.toLowerCase();
             if (el.placeholder) return `${tag}[placeholder="${el.placeholder}"]`;
-            if (el.className) {
-              const cls = el.className.split(' ').find(c => /^[a-zA-Z]/.test(c));
+            if (el.className && typeof el.className === 'string') {
+              // Utility-CSS frameworks (Tailwind etc.) emit class tokens like "text-[#141B34]" or
+              // "hover:text-sm" that contain characters CSS selectors can't parse unescaped — skip those.
+              const cls = el.className.split(' ').find(c => /^[a-zA-Z][\w-]*$/.test(c));
               if (cls) return `${tag}.${cls}`;
             }
             return tag;
           };
 
+          // Radio/checkbox group members all share the same [name], so generateSelector() alone
+          // would match every option in the group — this picks out just the one clicked.
+          const generateOptionSelector = (el) => {
+            if (el.id && /^[a-zA-Z][\w-]*$/.test(el.id)) return `#${el.id}`;
+            if (el.name && el.value) return `input[name="${el.name}"][value="${el.value.replace(/"/g, '\\"')}"]`;
+            return generateSelector(el);
+          };
+
           const getLabel = (el) =>
             el.getAttribute('aria-label') || el.placeholder || el.name || el.id ||
             (el.textContent || '').trim().substring(0, 30) || el.tagName.toLowerCase();
+
+          const getOptionLabel = (el) => {
+            if (el.id) {
+              const lab = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+              if (lab) return lab.textContent.trim().slice(0, 60);
+            }
+            const wrapLabel = el.closest('label');
+            if (wrapLabel) return wrapLabel.textContent.trim().slice(0, 60);
+            return getLabel(el);
+          };
 
           let actionCount = 0;
           const updateCount = () => {
@@ -464,19 +528,169 @@ app.post('/api/recording/start', requireAuth, checkUsageLimit, async (req, res) 
             if (el) el.textContent = `${++actionCount} action${actionCount === 1 ? '' : 's'}`;
           };
 
+          // Class-based selectors often match several elements (e.g. min & max salary boxes both
+          // being "input.border"). Record which match this element is, so replay targets the right one.
+          const getMatchIndex = (el, sel) => {
+            try {
+              const m = document.querySelectorAll(sel);
+              if (m.length > 1) return Math.max(0, Array.from(m).indexOf(el));
+            } catch (_) {}
+            return 0;
+          };
+
+          // Post-click snapshot: fires 600ms AFTER each click so autocomplete/React fills are included.
+          // Radio/checkbox inputs are excluded — their .value is a static option code (e.g. an author ID or
+          // sort key) that exists whether or not the box is checked, so scanning them floods the recording
+          // with dozens of untouched filter options. Actual checkbox/radio toggles are still captured by the click handler.
+          const FIELD_SELECTOR = 'input:not([type="hidden"]):not([type="radio"]):not([type="checkbox"]), textarea, select, [contenteditable="true"], [role="textbox"], [role="combobox"]';
+          const getVal = el => (el.value !== undefined && el.value !== null) ? el.value : (el.textContent || '').trim();
+          const fieldSnapshot = new Map(); // selector → last recorded value
+
+          // Some widgets (nav mega-menus, price/discount sliders) attach to the DOM via AJAX a second or two
+          // after navigation — later than our initial seed pass. So instead of seeding once, we treat any
+          // field discovered before this settle deadline as a baseline default (silently), not a user edit.
+          // Only changes seen AFTER the page has settled count as something the user actually typed.
+          const settleUntil = Date.now() + 1800;
+
+          document.querySelectorAll(FIELD_SELECTOR).forEach(el => {
+            if (el.closest('#__sapi_bar')) return;
+            const val = getVal(el);
+            if (val) { const s = generateSelector(el); fieldSnapshot.set(s + '|' + getMatchIndex(el, s), val); }
+          });
+
+          const snapshotAll = () => {
+            const settling = Date.now() < settleUntil;
+            document.querySelectorAll(FIELD_SELECTOR).forEach(el => {
+              if (el.closest('#__sapi_bar')) return;
+              const val = getVal(el);
+              if (!val || val.length > 300) return;
+              const sel = generateSelector(el);
+              const mi  = getMatchIndex(el, sel);
+              const key = sel + '|' + mi;
+              if (fieldSnapshot.get(key) === val) return;
+              fieldSnapshot.set(key, val);
+              if (settling) return; // still-loading widget catching up to its default — not a real edit
+              window.__recordAction({ type: 'fill', selector: sel, matchIndex: mi, value: val, label: getLabel(el), inputType: el.type || 'text', tag: el.tagName.toLowerCase(), autocomplete: true });
+              updateCount();
+            });
+          };
+
           document.addEventListener('click', (e) => {
             if (e.target.closest('#__sapi_bar')) return;
+
+            // Filter panels (location, category, job type, etc.) are almost always a group of
+            // radio/checkbox inputs sharing one [name]. Capture every option in the group — not just
+            // the one clicked — so replay can later pick a DIFFERENT option based on what's asked for.
+            let optionInput = null;
+            if (e.target.tagName === 'INPUT' && (e.target.type === 'radio' || e.target.type === 'checkbox')) {
+              optionInput = e.target;
+            } else {
+              const wrapLabel = e.target.closest('label');
+              if (wrapLabel) optionInput = wrapLabel.querySelector('input[type="radio"], input[type="checkbox"]');
+            }
+            if (optionInput && optionInput.name) {
+              const groupEls = Array.from(document.querySelectorAll(`input[name="${CSS.escape(optionInput.name)}"]`));
+              if (groupEls.length > 1) {
+                window.__recordAction({
+                  type: 'choice',
+                  groupName: optionInput.name,
+                  options: groupEls.map(el => ({ selector: generateOptionSelector(el), label: getOptionLabel(el), value: el.value })),
+                  selectedSelector: generateOptionSelector(optionInput),
+                  selectedLabel: getOptionLabel(optionInput),
+                  label: optionInput.name,
+                });
+                updateCount();
+                return;
+              }
+            }
+
+            // Some app-built filter menus (React/Angular dropdown panels) have no real form inputs
+            // behind them at all — just a list of clickable text items with app-internal state.
+            // Detect that shape (a clicked list item with 2+ text siblings) and match by visible text
+            // at replay time instead of a selector, since there's no [name]/[value] to key off.
+            const optionEl = e.target.closest('li, [role="option"], [role="menuitem"]');
+            if (optionEl && !optionInput) {
+              const container = optionEl.parentElement;
+              const getItemLabel = (el) => {
+                const lab = el.querySelector('label');
+                return (lab ? lab.textContent : el.textContent).trim().slice(0, 60);
+              };
+              if (container && container.children.length > 1) {
+                const options = [...new Set(Array.from(container.children).map(getItemLabel))].filter(t => t && t.length < 60);
+                if (options.length > 1) {
+                  window.__recordAction({
+                    type: 'choice',
+                    mode: 'text',
+                    groupName: 'Option',
+                    options: options.map(label => ({ label })),
+                    selectedLabel: getItemLabel(optionEl),
+                    label: 'Option',
+                  });
+                  updateCount();
+                  return;
+                }
+              }
+            }
+
             const sel = generateSelector(e.target);
-            window.__recordAction({ type: 'click', selector: sel, tag: e.target.tagName.toLowerCase(), label: getLabel(e.target) });
+            window.__recordAction({ type: 'click', selector: sel, matchIndex: getMatchIndex(e.target, sel), tag: e.target.tagName.toLowerCase(), label: getLabel(e.target) });
             updateCount();
+            // Snapshot AFTER click so autocomplete fills and React state updates are captured
+            setTimeout(snapshotAll, 600);
           }, true);
 
+          // Native <input type="range"> sliders fire 'change' on release.
           document.addEventListener('change', (e) => {
             const el = e.target;
-            if (!['INPUT','TEXTAREA','SELECT'].includes(el.tagName)) return;
-            const sel = generateSelector(el);
-            window.__recordAction({ type: 'fill', selector: sel, value: el.value, label: getLabel(el), inputType: el.type || 'text', tag: el.tagName.toLowerCase() });
+            if (Date.now() < settleUntil) return;
+            if (el.tagName === 'INPUT' && el.type === 'range') {
+              const s = generateSelector(el);
+              window.__recordAction({ type: 'slider', selector: s, matchIndex: getMatchIndex(el, s), value: el.value, min: el.min || '0', max: el.max || '100', label: getLabel(el) });
+              updateCount();
+            }
+          }, true);
+
+          // Custom drag-slider widgets (noUiSlider, rc-slider, MUI, etc.) expose position via
+          // aria-valuenow on a [role="slider"] element rather than a real <input>. Debounce so we
+          // only record the settled value once the user releases the handle, not every drag tick.
+          const sliderDebounce = new Map();
+          const recordSliderChange = (el) => {
+            if (Date.now() < settleUntil) return;
+            const val = el.getAttribute('aria-valuenow');
+            if (val == null) return;
+            const s = generateSelector(el);
+            window.__recordAction({
+              type: 'slider', selector: s, matchIndex: getMatchIndex(el, s), value: val,
+              min: el.getAttribute('aria-valuemin') || '0', max: el.getAttribute('aria-valuemax') || '100',
+              label: el.getAttribute('aria-label') || getLabel(el),
+            });
             updateCount();
+          };
+          new MutationObserver((mutations) => {
+            const touched = new Set();
+            for (const m of mutations) {
+              if (m.attributeName === 'aria-valuenow' && m.target.getAttribute('role') === 'slider' && !touched.has(m.target)) {
+                touched.add(m.target);
+                const el = m.target;
+                const sel = generateSelector(el);
+                const key = sel + '|' + getMatchIndex(el, sel);
+                clearTimeout(sliderDebounce.get(key));
+                sliderDebounce.set(key, setTimeout(() => recordSliderChange(el), 500));
+              }
+            }
+          }).observe(document.body, { attributes: true, attributeFilter: ['aria-valuenow'], subtree: true });
+
+          // Snapshot when focus leaves a field (catches typing without clicking away)
+          document.addEventListener('focusout', (e) => {
+            const el = e.target;
+            if (!['INPUT','TEXTAREA'].includes(el.tagName) && !el.isContentEditable) return;
+            if (el.closest('#__sapi_bar')) return;
+            setTimeout(snapshotAll, 300);
+          }, true);
+
+          // Snapshot on Tab/Enter in case user navigates with keyboard
+          document.addEventListener('keydown', (e) => {
+            if (e.key === 'Tab' || e.key === 'Enter') setTimeout(snapshotAll, 300);
           }, true);
         });
       } catch (_) {}
@@ -487,55 +701,174 @@ app.post('/api/recording/start', requireAuth, checkUsageLimit, async (req, res) 
       const url = frame.url();
       if (!url || url === 'about:blank') return;
       steps.push({ type: 'navigate', url, timestamp: Date.now() });
+      lastNavAt = Date.now();
       await new Promise(r => setTimeout(r, 600));
       await injectRecorder(frame);
     });
 
-    // Start screen
+    // Start screen — with a direct URL bar so users never type in Chrome's address bar (which goes to Google)
     await page.evaluate(() => {
       document.body.style.cssText = 'margin:0;background:#0f0f23;display:flex;align-items:center;justify-content:center;min-height:100vh;font-family:Arial,sans-serif;';
       document.body.innerHTML = `
-        <div style="padding:40px;max-width:560px;width:100%;">
-          <div style="text-align:center;margin-bottom:28px;">
-            <div style="font-size:52px;margin-bottom:12px;">🎙️</div>
-            <h1 style="color:#a5b4fc;font-size:24px;margin:0 0 8px;">Recording Started!</h1>
-            <p style="color:#94a3b8;font-size:14px;line-height:1.6;margin:0;">
-              Type any website URL in the address bar and do your task.<br>
-              Every click and form fill is captured automatically.
-            </p>
+        <div style="padding:32px;max-width:580px;width:100%;">
+          <div style="text-align:center;margin-bottom:24px;">
+            <div style="font-size:48px;margin-bottom:10px;">🎙️</div>
+            <h1 style="color:#a5b4fc;font-size:22px;margin:0 0 6px;">Recording Started</h1>
+            <p style="color:#64748b;font-size:13px;margin:0;">Use the box below to open a website — don't type in Chrome's address bar</p>
           </div>
 
-          <div style="background:#1a1a3e;border:1px solid #312e81;border-radius:12px;padding:18px;margin-bottom:16px;font-size:13px;text-align:left;">
-            <p style="margin:0 0 10px;color:#6366f1;font-weight:bold;font-size:14px;">📋 What to record:</p>
-            <p style="margin:5px 0;color:#94a3b8;">• Search for flights on <strong style="color:#e2e8f0;">skyscanner.net</strong></p>
-            <p style="margin:5px 0;color:#94a3b8;">• Look up a stock on <strong style="color:#e2e8f0;">dsebd.org</strong></p>
-            <p style="margin:5px 0;color:#94a3b8;">• Search a movie on <strong style="color:#e2e8f0;">imdb.com</strong></p>
-            <p style="margin:5px 0;color:#94a3b8;">• Fill any form or do any task on any website</p>
+          <div style="background:#1e1b4b;border:2px solid #6366f1;border-radius:14px;padding:20px;margin-bottom:20px;">
+            <p style="margin:0 0 10px;color:#a5b4fc;font-weight:bold;font-size:14px;">🌐 Step 1 — Open the website you want to record:</p>
+            <div style="display:flex;gap:8px;">
+              <input id="__sapi_url" type="text" placeholder="rokomari.com  or  bdjobs.com  or  daraz.com.bd"
+                style="flex:1;padding:10px 14px;border-radius:8px;border:1px solid #4338ca;background:#0f0f23;color:white;font-size:14px;outline:none;" />
+              <button id="__sapi_go"
+                style="background:#6366f1;color:white;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;font-weight:bold;font-size:14px;white-space:nowrap;">
+                Go →
+              </button>
+            </div>
+            <p style="margin:8px 0 0;color:#475569;font-size:11px;">⚡ This opens the site directly — no Google in between</p>
           </div>
 
-          <div style="background:#1a0a00;border:1px solid #92400e;border-radius:12px;padding:16px;font-size:13px;text-align:left;">
-            <p style="margin:0 0 8px;color:#f59e0b;font-weight:bold;">⚠️ If the website requires login first:</p>
-            <p style="margin:4px 0;color:#d97706;">1. Log in to the website using your <strong>email & password</strong> (not Google Sign-In — Google blocks automated browsers)</p>
-            <p style="margin:4px 0;color:#d97706;">2. Once you are logged in, do your task normally</p>
-            <p style="margin:8px 0 0;color:#92400e;font-size:12px;">Google Sign-In inside this recording browser will not work — it detects automated browsers.</p>
+          <div style="background:#1a1a3e;border:1px solid #312e81;border-radius:12px;padding:16px;margin-bottom:16px;font-size:13px;">
+            <p style="margin:0 0 8px;color:#6366f1;font-weight:bold;">📋 Step 2 — Do your task on the website:</p>
+            <p style="margin:4px 0;color:#94a3b8;">• Search for a product, flight, job, stock — whatever you want to automate</p>
+            <p style="margin:4px 0;color:#94a3b8;">• Fill in the form fields, click buttons — everything is captured</p>
+            <p style="margin:4px 0;color:#94a3b8;">• When done, click <strong style="color:#ef4444;">⏹ Stop & Save</strong> in the toolbar above</p>
           </div>
 
-          <p style="color:#475569;font-size:12px;margin-top:16px;text-align:center;">When done, click the red ⏹ Stop & Save button in the top toolbar.</p>
+          <div style="background:#0a1a0a;border:1px solid #166534;border-radius:12px;padding:14px;font-size:12px;color:#86efac;">
+            ✅ <strong>Sites that work well:</strong> rokomari.com · bdjobs.com · daraz.com.bd · dsebd.org · imdb.com · chaldal.com
+          </div>
         </div>`;
+
+      document.getElementById('__sapi_go').onclick = () => {
+        let url = document.getElementById('__sapi_url').value.trim();
+        if (!url) return;
+        // Strip accidental http prefix typos then rebuild
+        url = url.replace(/^https?:\/\//i, '');
+        // If no dot in the hostname part, assume .com (e.g. "rokomari" → "rokomari.com")
+        const hostPart = url.split('/')[0];
+        if (!hostPart.includes('.')) url = url + '.com';
+        url = 'https://' + url;
+        window.location.href = url;
+      };
+      document.getElementById('__sapi_url').addEventListener('keydown', e => {
+        if (e.key === 'Enter') document.getElementById('__sapi_go').click();
+      });
     });
 
     activeSessions.set(sessionId, { browser, page, steps, stopped: false });
+
+    // Server-side field polling — catches React inputs, autocomplete, date pickers.
+    // Runs every 600ms from Node.js, bypassing browser event issues entirely.
+    const lastFieldVals = new Map();
+    const fieldPoller = setInterval(async () => {
+      const sess = activeSessions.get(sessionId);
+      if (!sess || sess.stopped) { clearInterval(fieldPoller); return; }
+      try {
+        const pages = await browser.pages().catch(() => []);
+        const pg = pages.find(p => !p.url().includes('about:blank') && !p.url().includes('devtools')) || pages[0];
+        if (!pg) return;
+        const fields = await pg.evaluate(() => {
+          const sel = el => {
+            const al = el.getAttribute('aria-label');
+            if (al) return `[aria-label="${al.replace(/"/g,"'")}"]`;
+            if (el.id) return `#${el.id}`;
+            if (el.name) return `[name="${el.name}"]`;
+            if (el.placeholder) return `[placeholder="${el.placeholder.replace(/"/g,"'")}"]`;
+            let s = el.tagName.toLowerCase();
+            const cls = Array.from(el.classList).filter(c => !c.match(/^(ng-|js-|is-|has-)/)).slice(0,2).join('.');
+            return cls ? `${s}.${cls}` : s;
+          };
+          const matchIndex = (el, s) => {
+            try { const m = document.querySelectorAll(s); if (m.length > 1) return Math.max(0, Array.from(m).indexOf(el)); } catch (_) {}
+            return 0;
+          };
+          return Array.from(document.querySelectorAll(
+            'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="radio"]):not([type="checkbox"]), textarea, [role="textbox"], [role="searchbox"], [role="combobox"]'
+          ))
+          .filter(el => !el.closest('#__sapi_bar') && (el.offsetWidth > 0 || el.offsetHeight > 0))
+          .map(el => {
+            const s = sel(el);
+            return {
+              selector: s,
+              matchIndex: matchIndex(el, s),
+              value: el.value || el.textContent?.trim() || '',
+              label: el.getAttribute('aria-label') || el.placeholder || el.name || el.id || '',
+              type: el.type || el.tagName.toLowerCase(),
+            };
+          })
+          .filter(f => f.value && f.value.length >= 3 && f.value.length < 300);
+        }).catch(() => []);
+
+        const settling = Date.now() - lastNavAt < 1800;
+        for (const f of fields) {
+          const key = f.selector + '|' + f.matchIndex;
+          if (lastFieldVals.get(key) === f.value) continue;
+          lastFieldVals.set(key, f.value);
+          if (settling) continue; // widget still loading its default (e.g. price-range slider) — not a user edit
+          // Remove any previous fill for same selector+index (keep latest value only)
+          const existing = sess.steps.findIndex(s => s.type === 'fill' && s.selector === f.selector && (s.matchIndex || 0) === f.matchIndex);
+          if (existing !== -1) sess.steps.splice(existing, 1);
+          sess.steps.push({ type: 'fill', selector: f.selector, matchIndex: f.matchIndex, value: f.value, label: f.label, inputType: f.type, autocomplete: true, timestamp: Date.now() });
+        }
+      } catch (_) {}
+    }, 600);
+
     res.json({ success: true, sessionId });
   } catch (err) {
     res.status(500).json({ error: 'Could not start recording: ' + err.message });
   }
 });
 
+// Post-recording cleanup — MUST run on every path that hands steps to the review UI.
+// (There are two stop paths: the in-browser "⏹ Stop & Save" toolbar button, whose steps flow
+// through GET /status polling, and the in-app stop button, which POSTs /stop.)
+function cleanRecordedSteps(steps) {
+  // Step 1: Remove duplicate rapid clicks
+  let clean = steps.filter((step, i) => {
+    if (i === 0) return true;
+    const prev = steps[i - 1];
+    if (step.type === 'click' && prev.type === 'click' && step.selector === prev.selector && step.timestamp - prev.timestamp < 400) return false;
+    return true;
+  });
+
+  // Step 2: Strip Google preamble — find the first real (non-Google) navigate and start there
+  const firstRealNav = clean.findIndex(s =>
+    s.type === 'navigate' &&
+    !s.url.includes('google.com') &&
+    !s.url.includes('google.co') &&
+    !s.url.startsWith('about:') &&
+    !s.url.startsWith('chrome:')
+  );
+  if (firstRealNav > 0) clean = clean.slice(firstRealNav);
+
+  // Step 3: Deduplicate consecutive navigates to the same URL
+  clean = clean.filter((step, i) => {
+    if (step.type !== 'navigate') return true;
+    const prev = clean.slice(0, i).reverse().find(s => s.type === 'navigate');
+    return !prev || prev.url !== step.url;
+  });
+
+  // Step 4: For fills and sliders on the same field (selector + matchIndex), keep only the LAST one —
+  // repeated snapshots/drag adjustments produce many intermediate values; only the final value matters.
+  const lastPos = new Map();
+  clean.forEach((s, i) => {
+    if (s.type === 'fill' || s.type === 'slider') lastPos.set(s.type + '|' + s.selector + '|' + (s.matchIndex || 0), i);
+  });
+  clean = clean.filter((s, i) =>
+    (s.type !== 'fill' && s.type !== 'slider') || lastPos.get(s.type + '|' + s.selector + '|' + (s.matchIndex || 0)) === i
+  );
+
+  return clean;
+}
+
 app.get('/api/recording/status/:sessionId', requireAuth, (req, res) => {
   const s = activeSessions.get(req.params.sessionId);
   if (!s) return res.json({ active: false, stopped: true, steps: [] });
   if (s.stopped) {
-    const steps = s.steps || [];
+    const steps = cleanRecordedSteps(s.steps || []);
     activeSessions.delete(req.params.sessionId);
     return res.json({ active: false, stopped: true, steps });
   }
@@ -547,19 +880,17 @@ app.post('/api/recording/stop/:sessionId', requireAuth, async (req, res) => {
   if (!s) return res.status(404).json({ error: 'Session not found.' });
 
   const steps = s.steps || [];
+  // Capture cookies from the recording session (helps bypass bot detection on replay)
+  let sessionCookies = [];
+  try {
+    const pages = await s.browser?.pages();
+    if (pages?.length) sessionCookies = await pages[0].cookies().catch(() => []);
+  } catch (_) {}
   try { await s.browser?.close(); } catch (_) {}
   activeSessions.delete(req.params.sessionId);
   logUsage(req.user.id, 'record');
 
-  // Deduplicate rapid clicks
-  const clean = steps.filter((step, i) => {
-    if (i === 0) return true;
-    const prev = steps[i - 1];
-    if (step.type === 'click' && prev.type === 'click' && step.selector === prev.selector && step.timestamp - prev.timestamp < 400) return false;
-    return true;
-  });
-
-  res.json({ success: true, steps: clean });
+  res.json({ success: true, steps: cleanRecordedSteps(steps), cookies: sessionCookies });
 });
 
 // ─── WORKFLOW ROUTES ──────────────────────────────────────────────────────────
@@ -575,11 +906,11 @@ app.get('/api/workflows', requireAuth, (req, res) => {
 });
 
 app.post('/api/workflows', requireAuth, (req, res) => {
-  const { name, description, url, steps, variables, constants } = req.body;
+  const { name, description, url, steps, variables, constants, cookies } = req.body;
   if (!name) return res.status(400).json({ error: 'API name is required.' });
   const id = uuidv4();
-  db.prepare('INSERT INTO workflows (id,user_id,name,description,url,steps,variables,constants) VALUES (?,?,?,?,?,?,?,?)')
-    .run(id, req.user.id, name, description || '', url || '', JSON.stringify(steps || []), JSON.stringify(variables || []), JSON.stringify(constants || {}));
+  db.prepare('INSERT INTO workflows (id,user_id,name,description,url,steps,variables,constants,session_cookies) VALUES (?,?,?,?,?,?,?,?,?)')
+    .run(id, req.user.id, name, description || '', url || '', JSON.stringify(steps || []), JSON.stringify(variables || []), JSON.stringify(constants || {}), JSON.stringify(cookies || []));
   res.json({ success: true, workflow: parseWf(db.prepare('SELECT * FROM workflows WHERE id=?').get(id)) });
 });
 
@@ -630,48 +961,256 @@ app.post('/api/workflows/:id/call', requireAuth, checkUsageLimit, async (req, re
   }
 });
 
-async function replayWorkflow(steps, inputs) {
+async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
+  const fsp = require('fs');
+  const chromePaths = [
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+  ];
+  const executablePath = chromePaths.find(p => fsp.existsSync(p));
+
   const browser = await puppeteer.launch({
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+    headless: false,
+    executablePath,
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled', '--window-size=1280,800', '--window-position=50,50'],
   });
   const page = await browser.newPage();
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36');
+  await page.evaluateOnNewDocument(() => { Object.defineProperty(navigator,'webdriver',{get:()=>undefined}); });
 
-  // Block images/fonts/media to make pages load faster
+  // Block images/fonts/media (keep stylesheets — some sites need them)
   await page.setRequestInterception(true);
   page.on('request', req => {
-    if (['image','font','media','stylesheet'].includes(req.resourceType())) req.abort();
+    if (['image','font','media'].includes(req.resourceType())) req.abort();
     else req.continue();
   });
 
+  // Global 90-second replay timeout — prevents 5-minute hangs on bad recordings
+  const replayTimeout = setTimeout(async () => {
+    try { await browser.close(); } catch (_) {}
+  }, 90000);
+
+  // Helper: detect if the current page is a bot-block / CAPTCHA page
+  const isBotBlocked = async () => {
+    try {
+      return await page.evaluate(() => {
+        const url   = window.location.href;
+        const title = document.title.toLowerCase();
+
+        // Google's CAPTCHA / unusual-traffic page
+        if (url.includes('google.com/sorry')) return true;
+
+        // Cloudflare challenge pages — their TITLE is exactly these phrases
+        if (title === 'just a moment...' || title === 'attention required! | cloudflare') return true;
+        if (title.startsWith('checking your browser')) return true;
+
+        // Cloudflare ray-id footer is a very specific signature
+        const rayId = document.querySelector('#cf-error-details, .ray-id, #cf-content');
+        if (rayId) return true;
+
+        // Cloudflare challenge form
+        if (document.querySelector('#challenge-form, #challenge-running, #turnstile-wrapper')) return true;
+
+        return false;
+      });
+    } catch { return false; }
+  };
+
+  // Resolve a step's target element, honoring matchIndex when the selector matches several elements
+  // (e.g. min & max salary boxes both recorded as "input.border").
+  const pickEl = async (step) => {
+    const els = await page.$$(step.selector).catch(() => []);
+    if (!els.length) return null;
+    return els[Math.min(step.matchIndex || 0, els.length - 1)];
+  };
+
   try {
-    for (const step of steps) {
+    // Inject saved session cookies if any (helps bypass bot detection on repeat runs)
+    if (savedCookies.length) {
+      onProgress?.('Restoring session...');
+      await page.setCookie(...savedCookies).catch(() => {});
+    }
+
+    // Safety net: skip any steps before the first non-Google navigate
+    const isGoogleUrl = u => u && (u.includes('google.com') || u.includes('google.co'));
+    const firstReal = steps.findIndex(s => s.type === 'navigate' && !isGoogleUrl(s.url));
+    const stepsToRun = firstReal > 0 ? steps.slice(firstReal) : steps;
+
+    // Recorded variable values, so a navigate URL that baked in the original search term
+    // (e.g. ?query=ek+nojo) can be rewritten with the value the user actually asked for this run.
+    const recordedVarValues = {};
+    for (const s of stepsToRun) {
+      if (s.type === 'fill' && s.isVariable && s.variableName && s.value) recordedVarValues[s.variableName] = s.value;
+    }
+
+    for (const step of stepsToRun) {
       if (step.type === 'navigate') {
-        await page.goto(step.url, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
-        await new Promise(r => setTimeout(r, 400));
+        let url = step.url;
+        for (const [varName, recordedVal] of Object.entries(recordedVarValues)) {
+          const newVal = inputs[varName];
+          if (newVal === undefined || String(newVal) === recordedVal) continue;
+          const variants = [recordedVal, encodeURIComponent(recordedVal), encodeURIComponent(recordedVal).replace(/%20/g, '+')];
+          for (const variant of variants) {
+            if (variant && url.includes(variant)) url = url.split(variant).join(encodeURIComponent(String(newVal)));
+          }
+        }
+        const host = (() => { try { return new URL(url).hostname; } catch { return url; } })();
+        onProgress?.(`Opening ${host}...`);
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+        await new Promise(r => setTimeout(r, 1500));
+        if (await isBotBlocked()) throw new Error('BOT_BLOCKED:' + url);
       } else if (step.type === 'click') {
+        const label = step.label || step.selector.replace(/[#.[\]"'=]/g,' ').trim().slice(0,30);
+        onProgress?.(`Clicking "${label}"...`);
         await page.waitForSelector(step.selector, { timeout: 3000 }).catch(() => {});
-        await page.click(step.selector).catch(() => {});
-        // Wait for potential navigation or AJAX
+        // Selectors built from a shared class (common for tab/filter/accordion headers styled
+        // identically) can match several elements — disambiguate by the text captured at record
+        // time, falling back to the recorded matchIndex position.
+        let disambiguated = false;
+        try {
+          const matches = await page.$$(step.selector);
+          if (matches.length > 1) {
+            let target = null;
+            if (step.label) {
+              for (const m of matches) {
+                const text = await m.evaluate(e => e.textContent.trim()).catch(() => '');
+                if (text === step.label) { target = m; break; }
+              }
+            }
+            if (!target && step.matchIndex !== undefined) target = matches[Math.min(step.matchIndex, matches.length - 1)];
+            if (target) { await target.scrollIntoView().catch(() => {}); await target.click().catch(() => {}); disambiguated = true; }
+          }
+        } catch (_) {}
+        if (!disambiguated) await page.click(step.selector).catch(() => {});
         await Promise.race([
           page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 4000 }).catch(() => {}),
           new Promise(r => setTimeout(r, 250)),
         ]);
       } else if (step.type === 'fill') {
         let value = step.value;
-        if (step.isVariable && step.variableName && inputs[step.variableName] !== undefined) {
-          value = inputs[step.variableName];
+        if (step.isVariable && step.variableName) {
+          // Exact match first
+          if (inputs[step.variableName] !== undefined) {
+            value = inputs[step.variableName];
+          } else {
+            // Fuzzy match: compare normalised variable name and label against input keys
+            const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+            const vn = norm(step.variableName);
+            const vl = norm(step.label || '');
+            for (const [key, val] of Object.entries(inputs)) {
+              const kn = norm(key);
+              if (kn === vn || kn === vl || vn.includes(kn) || kn.includes(vn) || vl.includes(kn) || kn.includes(vl)) {
+                value = val; break;
+              }
+            }
+          }
         }
+        const label = step.label || step.variableName || 'field';
+        onProgress?.(`Filling "${label}"...`);
         await page.waitForSelector(step.selector, { timeout: 3000 }).catch(() => {});
-        await page.click(step.selector, { clickCount: 3 }).catch(() => {});
-        // Clear first then type
-        await page.evaluate(sel => { const el = document.querySelector(sel); if(el) el.value=''; }, step.selector).catch(() => {});
-        await page.type(step.selector, String(value), { delay: 40 }).catch(() => {});
-        await new Promise(r => setTimeout(r, 120));
+        const fillEl = await pickEl(step);
+        if (fillEl) {
+          await fillEl.click({ clickCount: 3 }).catch(() => {});
+          await fillEl.evaluate(el => {
+            // Clear both value property and contenteditable text
+            if (el.value !== undefined) el.value = '';
+            else el.textContent = '';
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+          }).catch(() => {});
+          await fillEl.type(String(value), { delay: 50 }).catch(() => {});
+        }
+        await new Promise(r => setTimeout(r, 700));
+        // If this was an autocomplete field, check if a dropdown appeared and pick the first option
+        if (step.autocomplete) {
+          const hasDropdown = await page.evaluate(() => {
+            const selectors = ['[role="listbox"]','[role="option"]','.pac-container .pac-item','[data-testid*="option"]','[aria-autocomplete] + *','ul[role="listbox"]'];
+            return selectors.some(s => { const el = document.querySelector(s); return el && el.offsetHeight > 0; });
+          }).catch(() => false);
+          if (hasDropdown) {
+            await page.keyboard.press('ArrowDown').catch(() => {});
+            await new Promise(r => setTimeout(r, 250));
+            await page.keyboard.press('Enter').catch(() => {});
+            await new Promise(r => setTimeout(r, 500));
+          }
+        }
+      } else if (step.type === 'choice') {
+        // Pick whichever recorded option's label best matches the requested value —
+        // falls back to the originally-recorded selection if not a variable or no good match.
+        let selector = step.selectedSelector, targetLabel = step.selectedLabel;
+        if (step.isVariable && step.variableName && inputs[step.variableName] !== undefined) {
+          const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          const wanted = norm(inputs[step.variableName]);
+          let best = null, bestScore = 0;
+          for (const opt of step.options || []) {
+            const optNorm = norm(opt.label);
+            const score = optNorm === wanted ? 2 : (optNorm.includes(wanted) || wanted.includes(optNorm)) ? 1 : 0;
+            if (score > bestScore) { bestScore = score; best = opt; }
+          }
+          if (best) { selector = best.selector; targetLabel = best.label; }
+        }
+        onProgress?.(`Selecting "${targetLabel}"...`);
+        if (step.mode === 'text') {
+          // No real form element behind this option — find whatever's currently on screen with this
+          // exact visible text (the filter panel this belongs to was opened by an earlier recorded
+          // click step). App-framework UIs (Angular/React) often ignore synthetic el.click() calls —
+          // only a real, trusted Puppeteer click (auto-scrolled into view) actually registers.
+          // Retry for up to ~4s: the panel a preceding click opened may still be animating in.
+          let el = null;
+          for (let attempt = 0; attempt < 5 && !el; attempt++) {
+            if (attempt) await new Promise(r => setTimeout(r, 800));
+            const handle = await page.evaluateHandle((text) => {
+              const all = Array.from(document.querySelectorAll('li, label, [role="option"], [role="menuitem"], button, a'));
+              const target = all.find(e => e.textContent.trim() === text);
+              return target ? (target.closest('li, [role="option"], [role="menuitem"], button, a') || target) : null;
+            }, targetLabel).catch(() => null);
+            el = handle?.asElement() || null;
+          }
+          if (el) {
+            await el.scrollIntoView().catch(() => {});
+            await el.click().catch(() => {});
+          }
+        } else {
+          await page.waitForSelector(selector, { timeout: 3000 }).catch(() => {});
+          await page.click(selector).catch(() => {});
+        }
+        await new Promise(r => setTimeout(r, 400));
+      } else if (step.type === 'slider') {
+        let target = step.value;
+        if (step.isVariable && step.variableName && inputs[step.variableName] !== undefined) {
+          target = inputs[step.variableName];
+        }
+        const min = parseFloat(step.min), max = parseFloat(step.max);
+        target = Math.max(min, Math.min(max, parseFloat(target)));
+        onProgress?.(`Setting "${step.label || 'range'}" to ${target}...`);
+        await page.waitForSelector(step.selector, { timeout: 3000 }).catch(() => {});
+        const sliderEl = await pickEl(step);
+        if (sliderEl) {
+          const isNativeRange = await sliderEl.evaluate(el => el.tagName === 'INPUT' && el.type === 'range').catch(() => false);
+          if (isNativeRange) {
+            await sliderEl.evaluate((el, val) => {
+              const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+              setter.call(el, val);
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+            }, target).catch(() => {});
+          } else {
+            // Custom drag-slider widget — direct value assignment won't move its internal state,
+            // so simulate a real mouse drag along the track to the proportional target position.
+            const box = await sliderEl.boundingBox().catch(() => null);
+            if (box && box.width > 0) {
+              const ratio = Math.max(0, Math.min(1, (target - min) / ((max - min) || 1)));
+              const y = box.y + box.height / 2;
+              await page.mouse.move(box.x + box.width / 2, y);
+              await page.mouse.down();
+              await page.mouse.move(box.x + box.width * ratio, y, { steps: 15 });
+              await page.mouse.up();
+              await new Promise(r => setTimeout(r, 300));
+            }
+          }
+        }
       }
     }
-    // Final wait for results to render
+    onProgress?.('Extracting results...');
     await new Promise(r => setTimeout(r, 1500));
 
     const data = await page.evaluate(() => {
@@ -690,127 +1229,210 @@ async function replayWorkflow(steps, inputs) {
           ).filter(r => r.some(c => c)),
         })).filter(t => t.rows.length > 0),
         // Extract visible text blocks (good for price/result cards)
-        textBlocks: Array.from(document.querySelectorAll('[class*="price"],[class*="result"],[class*="card"],[class*="item"],[class*="flight"],[class*="ticket"],[class*="offer"]'))
-          .slice(0,8).map(el => clean(el.textContent)).filter(t => t.length > 5 && t.length < 500),
+        // Prioritize blocks that actually contain a price — on listing pages the first N matches
+        // of a generic class-name selector are often nav/promo widgets, not the real results.
+        textBlocks: (() => {
+          const candidates = Array.from(document.querySelectorAll(
+            '[class*="price"],[class*="result"],[class*="card"],[class*="item"],[class*="flight"],[class*="ticket"],[class*="offer"],[class*="product"],[class*="book"]'
+          )).map(el => clean(el.textContent)).filter(t => t.length > 5 && t.length < 500);
+          const hasPrice = t => /(\$|৳|tk\.?|₹|€|£)\s?[\d,]/i.test(t);
+          const uniq = arr => [...new Set(arr)];
+          return uniq([...candidates.filter(hasPrice), ...candidates.filter(t => !hasPrice(t))]).slice(0, 10);
+        })(),
+        // Generic repeated-structure detector: search results, job lists, and product grids are
+        // always "many sibling elements that look alike". Find the container with the most
+        // same-tagged, content-sized children — that IS the results list, regardless of the
+        // site's framework or class-naming scheme (works even on Angular/React custom elements).
+        listItems: (() => {
+          const candidates = [];
+          document.querySelectorAll('div, ul, ol, section, tbody, main').forEach(parent => {
+            if (parent.closest('nav, header, footer, [role="navigation"]')) return;
+            const kids = Array.from(parent.children).filter(k => {
+              const t = clean(k.textContent);
+              return t.length > 30 && t.length < 700;
+            });
+            if (kids.length < 3) return;
+            const tagCounts = {};
+            kids.forEach(k => { tagCounts[k.tagName] = (tagCounts[k.tagName] || 0) + 1; });
+            const [domTag, domCount] = Object.entries(tagCounts).sort((a, b) => b[1] - a[1])[0];
+            if (domCount < 3) return;
+            const items = kids.filter(k => k.tagName === domTag);
+            const avgLen = items.reduce((a, k) => a + clean(k.textContent).length, 0) / items.length;
+            candidates.push({ items, score: items.length * Math.min(250, avgLen) });
+          });
+          candidates.sort((a, b) => b.score - a.score);
+          const best = candidates[0];
+          return best ? [...new Set(best.items.slice(0, 15).map(k => clean(k.textContent)))].filter(Boolean) : [];
+        })(),
         links: Array.from(document.querySelectorAll('a[href]')).slice(0,15)
           .map(a => ({ text: clean(a.textContent), href: a.href })).filter(l => l.text.length > 2),
       };
     });
+    clearTimeout(replayTimeout);
     await browser.close();
     return data;
   } catch (err) {
+    clearTimeout(replayTimeout);
     await browser.close();
     throw err;
   }
 }
 
-// ─── AI CHAT ENDPOINT ────────────────────────────────────────────────────────
-app.post('/api/workflows/:id/chat', requireAuth, checkUsageLimit, async (req, res) => {
+// ─── AI CHAT ENDPOINT (SSE streaming) ────────────────────────────────────────
+app.post('/api/workflows/:id/chat', requireAuth, async (req, res) => {
+  // All checks BEFORE SSE headers (once SSE starts we can't send JSON errors)
   const w = db.prepare('SELECT * FROM workflows WHERE id=?').get(req.params.id);
   if (!w) return res.status(404).json({ error: 'API not found.' });
 
   const isOwner = w.user_id === req.user.id;
-  const bought  = db.prepare('SELECT id FROM purchases WHERE buyer_id=? AND workflow_id=?').get(req.user.id, req.params.id);
+  const bought  = isOwner ? null : db.prepare('SELECT id FROM purchases WHERE buyer_id=? AND workflow_id=?').get(req.user.id, req.params.id);
   if (!isOwner && !bought && w.price > 0) return res.status(403).json({ error: 'Purchase this API first.' });
-  if (req.user.plan === 'free') return res.status(403).json({ error: 'Running APIs requires a paid plan. Please upgrade.', upgradeRequired: true });
+  if (req.user.plan === 'free') return res.status(403).json({ error: 'Running APIs requires a paid plan.', upgradeRequired: true });
 
-  const variables = JSON.parse(w.variables || '[]');
-  const constants  = JSON.parse(w.constants  || '{}');
-  const { message } = req.body;
-  if (!message) return res.status(400).json({ error: 'No message provided.' });
-
-  // Step 1 — Extract variable values from natural language using Claude
-  let inputs = {};
-  let understood = '';
-  try {
-    const varList = variables.length
-      ? variables.map(v => `  - ${v.name} (label: "${v.label||v.name}", recorded value: "${v.defaultValue||''}")`).join('\n')
-      : '  (no variables — this API runs the same way every time)';
-
-    const raw = await askClaude(`You help extract form field values from a user's natural language request for a web automation task.
-
-API Name: "${w.name}"
-API Description: "${w.description || 'Not provided'}"
-Variables this API needs:
-${varList}
-
-User's request: "${message}"
-
-Instructions:
-- Extract a value for EVERY variable from the user's message
-- For travel: extract origin city/airport, destination city/airport, departure date, return date, passenger count
-- For dates: convert "next friday", "July 20", "next week" to a real date string (today is ${new Date().toDateString()})
-- For airports: use full name if known, e.g. "Dhaka (DAC)", "London Heathrow (LHR)"
-- If a variable is not mentioned, use its recorded value as-is
-- For email/login fields: always use the recorded default value unchanged
-
-Respond with ONLY valid JSON:
-{
-  "inputs": { "variableName": "value", ... },
-  "understood": "One short sentence describing the task, e.g. 'Searching for flights from Dhaka to London on 15 July, returning 25 July'"
-}`, 700);
-
-    const match = raw.match(/\{[\s\S]*\}/);
-    if (match) {
-      const parsed = JSON.parse(match[0]);
-      inputs = { ...constants, ...(parsed.inputs || {}) };
-      understood = parsed.understood || 'Running your request...';
-    }
-  } catch (err) {
-    // Fall back to recorded defaults if AI fails
-    variables.forEach(v => { inputs[v.name] = v.defaultValue || ''; });
-    Object.assign(inputs, constants);
-    understood = 'Running with your inputs...';
+  const now = new Date();
+  if (req.user.plan === 'monthly') {
+    const ms = new Date(now.getFullYear(), now.getMonth(), 1);
+    const cnt = db.prepare('SELECT COUNT(*) as c FROM usage_logs WHERE user_id=? AND created_at>=?').get(req.user.id, ms.toISOString()).c;
+    if (cnt >= 500) return res.status(429).json({ error: 'Monthly limit reached!', upgradeRequired: true });
   }
 
-  // Step 2 — Replay the workflow
+  const { message } = req.body;
+  if (!message?.trim()) return res.status(400).json({ error: 'No message provided.' });
+
+  // Switch to SSE mode
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+  const emit = (type, data) => { try { res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`); } catch(_) {} };
+
+  const variables    = JSON.parse(w.variables     || '[]');
+  const constants    = JSON.parse(w.constants     || '{}');
+  const savedCookies = JSON.parse(w.session_cookies || '[]');
+
+  // ── Step 1: Understand the request with Claude ─────────────────────────────
+  let inputs = {}, understood = '';
+  if (ai) {
+    emit('status', { text: 'Understanding your request...' });
+    try {
+      const varList = variables.length
+        ? variables.map(v => {
+            if (v.type === 'choice') return `  - ${v.name}: label="${v.label||v.name}", type=choice, must be one of [${(v.options||[]).map(o=>`"${o}"`).join(', ')}], current="${v.defaultValue||''}"`;
+            if (v.type === 'slider') return `  - ${v.name}: label="${v.label||v.name}", type=number, range ${v.min}-${v.max}, current=${v.defaultValue}`;
+            return `  - ${v.name}: label="${v.label||v.name}", example="${v.defaultValue||''}"`;
+          }).join('\n')
+        : '  (no variables — runs the same every time)';
+
+      const raw = await askClaude(`You are filling in a web form for a user. Extract the values they want.
+
+API: "${w.name}"
+Today: ${new Date().toDateString()}
+
+Variables to fill (use the EXACT key names shown):
+${varList}
+
+User said: "${message}"
+
+Rules:
+- Use the EXACT variable name as the JSON key (copy it character for character)
+- Convert relative dates to real dates (e.g. "next friday" → "2026-07-03")
+- For origin/destination: include city name as typed, e.g. "Dhaka", "Sylhet", "London"
+- If user doesn't mention a variable, keep its current/example value
+- For "choice" variables, copy one of the listed options exactly — pick whichever is the closest match to what the user wants
+- For "number" (range) variables, output a plain number within the given range
+- For password/email fields: always use the example value unchanged
+
+Return ONLY this JSON (no other text):
+{"inputs":{"EXACT_VAR_NAME":"value"},"understood":"One sentence describing the task"}`, 500);
+
+      // Extract JSON robustly — handle markdown fences and find balanced braces
+      const cleaned = raw.replace(/```[\w]*\n?/g, '').replace(/\n?```/g, '').trim();
+      const jsonStr = extractBalancedJSON(cleaned);
+      if (jsonStr) {
+        const p = JSON.parse(jsonStr);
+        inputs     = { ...constants, ...(p.inputs || {}) };
+        understood = p.understood || '';
+      }
+    } catch (aiErr) {
+      emit('error', { text: '⚠️ AI error: ' + aiErr.message });
+      return res.end();
+    }
+  }
+
+  // Fall back to defaults if AI failed or not configured
+  if (!Object.keys(inputs).length) {
+    variables.forEach(v => { inputs[v.name] = v.defaultValue || ''; });
+    Object.assign(inputs, constants);
+  }
+  if (!understood) understood = `Running ${w.name}...`;
+
+  emit('understood', { text: understood });
+
+  // ── Step 2: Replay the workflow ────────────────────────────────────────────
   logUsage(req.user.id, 'call', w.id);
   db.prepare('UPDATE workflows SET call_count=call_count+1, last_run=CURRENT_TIMESTAMP WHERE id=?').run(w.id);
 
-  const steps = JSON.parse(w.steps || '[]');
   let result;
   try {
-    result = await replayWorkflow(steps, inputs);
+    result = await replayWorkflow(
+      JSON.parse(w.steps || '[]'),
+      inputs,
+      savedCookies,
+      (msg) => emit('progress', { text: msg })
+    );
   } catch (err) {
-    return res.status(500).json({ error: 'Execution failed: ' + err.message, understood });
+    const isBlocked = err.message.startsWith('BOT_BLOCKED');
+    const blockedUrl = isBlocked ? err.message.split('BOT_BLOCKED:')[1] || '' : '';
+    const isGoogle = blockedUrl.includes('google.com');
+    emit('result', {
+      text: isBlocked
+        ? isGoogle
+          ? `🚫 Your recording starts at **Google.com** instead of going directly to the travel site.\n\n**How to fix:**\n1. Delete this API (🗑 button)\n2. Click + Record New API\n3. In the Chrome window that opens — click the **address bar at the top** and type the website URL directly (e.g. \`gozayaan.com\`)\n4. Don't search for it on Google — go directly!`
+          : `🚫 ${blockedUrl ? new URL(blockedUrl).hostname : 'The website'} blocked the automated browser (Cloudflare protection).\n\nDelete this API, re-record going directly to the site URL.`
+        : '⚠️ Something went wrong: ' + err.message,
+      data: {},
+      actionLabel: isBlocked ? 'Delete & Re-record' : 'Try Again',
+      actionUrl: null,
+    });
+    return res.end();
   }
 
-  // Step 3 — Summarize and generate smart action buttons using Claude
-  let summary = '';
-  let actionLabel = 'Search Again';
-  try {
-    const pageText = [
-      result.title,
-      ...result.headings.slice(0,5),
-      ...result.paragraphs.slice(0,6),
-      ...result.textBlocks.slice(0,5),
-      ...(result.tables||[]).flatMap(t => t.rows.slice(0,4).map(r => r.join(' | '))),
-    ].join('\n').slice(0, 2000);
+  // ── Step 3: Summarize with Claude ─────────────────────────────────────────
+  let summary = '', actionLabel = 'Open Page';
+  if (ai) {
+    emit('status', { text: 'Reading the results...' });
+    try {
+      const snippet = [
+        result.title,
+        // listItems (the detected results list) is the most reliable signal — feed it first
+        ...(result.listItems||[]).slice(0,10),
+        ...result.headings.slice(0,5),
+        ...(result.textBlocks||[]).slice(0,5),
+        ...(result.paragraphs||[]).slice(0,4),
+        ...(result.tables||[]).flatMap(t => t.rows.slice(0,3).map(r => r.join(' | '))),
+      ].join('\n').slice(0, 2200);
 
-    const summaryRaw = await askClaude(`A web automation ran this task: "${understood}"
-It landed on: ${result.url}
-Page title: "${result.title}"
+      const raw = await askClaude(`Task: "${understood}"
+URL: ${result.url}
+Title: "${result.title}"
 Page content:
-${pageText}
+${snippet}
 
-Write 2–4 sentences summarizing what was found. Be specific: mention prices, flight names, times, stocks, or whatever data is visible.
-If the page shows a CAPTCHA ("Are you a robot?"), say: "The website showed a CAPTCHA challenge. Try running again or log in manually first."
-If the page shows an error or login wall, say so clearly.
+Summarize in 2-3 sentences what was found. Be specific about prices, names, results visible.
+If you see "CAPTCHA", "robot", "blocked", "access denied", "press and hold" — say: "⚠️ The website blocked the automated browser. This site has very aggressive bot protection. Try a similar site like Google Flights, Kayak, or Momondo instead."
 
-Also on the last line write: ACTION: [short 2-word action label for a button, like "Book Flight", "Buy Ticket", "View Stock", "See Results", "Search Again"]`, 500);
+Last line must be: ACTION: [2-3 word action label e.g. "Book Cheapest", "View Flights", "Check Price"]`, 400);
 
-    const actionMatch = summaryRaw.match(/ACTION:\s*(.+)/i);
-    if (actionMatch) {
-      actionLabel = actionMatch[1].trim().replace(/['"]/g, '');
-      summary = summaryRaw.replace(/ACTION:.*$/im, '').trim();
-    } else {
-      summary = summaryRaw;
+      const am = raw.match(/ACTION:\s*(.+)/i);
+      actionLabel = am ? am[1].trim().replace(/['"]/g,'') : 'Open Page';
+      summary = raw.replace(/ACTION:.*$/im,'').trim();
+    } catch (_) {
+      summary = result.title || 'Completed.';
     }
-  } catch (_) {
-    summary = `Completed. Landed on: ${result.title || result.url}`;
+  } else {
+    summary = `⚠️ Add ANTHROPIC_API_KEY to .env for AI summaries. Landed on: ${result.title}`;
+    actionLabel = 'Open Page';
   }
 
-  res.json({ success: true, understood, summary, actionLabel, result, inputsUsed: inputs });
+  emit('result', { summary, actionLabel, result, inputsUsed: inputs });
+  res.end();
 });
 
 // ─── MARKETPLACE ─────────────────────────────────────────────────────────────

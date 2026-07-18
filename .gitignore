@@ -2,3 +2,7 @@ node_modules/
 workflows.json
 .env
 *.db
+*.db-shm
+*.db-wal
+server_out.txt
+server_err.txt

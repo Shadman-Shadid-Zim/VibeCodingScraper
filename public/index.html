@@ -296,12 +296,7 @@
     </div>
 
     <div id="rec-review" style="display:none">
-      <div class="card" style="margin-bottom:20px">
-        <h3 style="font-size:17px;font-weight:700;margin-bottom:8px">✅ Recording Complete!</h3>
-        <p style="color:var(--muted);font-size:13px;margin-bottom:18px">For each form field you filled, choose: <strong style="color:var(--primary)">Variable</strong> (user types this each time) or <strong style="color:var(--success)">Constant</strong> (always the same).</p>
-        <div id="steps-list" style="display:flex;flex-direction:column;gap:10px"></div>
-      </div>
-      <div class="card">
+      <div class="card" style="margin-bottom:20px;position:sticky;top:70px;z-index:50;box-shadow:0 8px 24px rgba(0,0,0,0.35)">
         <h3 style="font-size:15px;font-weight:700;margin-bottom:18px">Name & Save Your API</h3>
         <div style="margin-bottom:14px"><label class="label">API Name *</label><input class="input" id="api-name" placeholder="e.g. DSE Stock Lookup, Netflix Search, Hotel Booking"></div>
         <div style="margin-bottom:22px"><label class="label">Description (optional)</label><textarea class="input" id="api-description" rows="2" placeholder="What does this API do? Who might find it useful?"></textarea></div>
@@ -309,6 +304,11 @@
           <button class="btn btn-primary btn-lg" onclick="saveWorkflow()" style="flex:1">💾 Save My API</button>
           <button class="btn btn-ghost" onclick="resetRecorder()">Discard</button>
         </div>
+      </div>
+      <div class="card" style="margin-bottom:20px">
+        <h3 style="font-size:17px;font-weight:700;margin-bottom:8px">✅ Recording Complete!</h3>
+        <p style="color:var(--muted);font-size:13px;margin-bottom:18px">For each form field you filled, choose: <strong style="color:var(--primary)">Variable</strong> (user types this each time) or <strong style="color:var(--success)">Constant</strong> (always the same).</p>
+        <div id="steps-list" style="display:flex;flex-direction:column;gap:10px"></div>
       </div>
     </div>
 
@@ -492,7 +492,7 @@
 // ── STATE ────────────────────────────────────────────────────────────────────
 let token = localStorage.getItem('sapiToken');
 let currentUser = null;
-let recId = null, recTimer = null, recSteps = [], selectedPlan = null;
+let recId = null, recTimer = null, recSteps = [], recCookies = [], selectedPlan = null;
 
 // ── THEME ────────────────────────────────────────────────────────────────────
 function getTheme(){ return localStorage.getItem('sapiTheme')||'dark'; }
@@ -694,6 +694,7 @@ async function stopRecording(){
   recId=null;
   if(!r.ok) return toast(r.data.error,'error');
   recSteps=r.data.steps||[];
+  recCookies=r.data.cookies||[];
   showReview(recSteps);
 }
 
@@ -702,7 +703,7 @@ function showReview(steps){
   document.getElementById('rec-review').style.display='';
   const list=document.getElementById('steps-list');
   list.innerHTML='';
-  const fills=steps.filter(s=>s.type==='fill');
+  const fills=steps.filter(s=>s.type==='fill'||s.type==='choice'||s.type==='slider');
   const nav=steps.filter(s=>s.type==='navigate').length;
   const clicks=steps.filter(s=>s.type==='click').length;
   if(!fills.length){
@@ -712,21 +713,35 @@ function showReview(steps){
     </div>`;
     return;
   }
-  list.innerHTML=`<div style="font-size:12px;color:var(--muted);margin-bottom:8px">Recorded ${steps.length} total actions including ${fills.length} form field${fills.length!==1?'s':''}. Label each one:</div>`;
+  list.innerHTML=`<div style="font-size:12px;color:var(--muted);margin-bottom:8px">Recorded ${steps.length} total actions including ${fills.length} field${fills.length!==1?'s':''}/filter${fills.length!==1?'s':''}. Label each one:</div>`;
   fills.forEach((step,i)=>{
     const realIdx=steps.indexOf(step);
     const d=document.createElement('div');
     d.style.cssText='background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:16px;';
     d.setAttribute('data-idx',realIdx);
+    let title, sub, defaultName;
+    if(step.type==='choice'){
+      title=step.groupName||'Filter';
+      sub=`You selected: <strong>"${step.selectedLabel}"</strong> (${(step.options||[]).length} option${(step.options||[]).length!==1?'s':''} available)`;
+      defaultName=step.groupName||('choice_'+i);
+    } else if(step.type==='slider'){
+      title=step.label||'Range';
+      sub=`You set it to: <strong>${step.value}</strong> (range ${step.min}–${step.max})`;
+      defaultName=step.label||('range_'+i);
+    } else {
+      title=step.label||step.selector;
+      sub=`You typed: <strong>"${step.value}"</strong>`;
+      defaultName=step.label||('input_'+i);
+    }
     d.innerHTML=`
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;flex-wrap:wrap;gap:8px">
-        <div><div style="font-weight:600;font-size:14px">${step.label||step.selector}</div><div style="color:var(--muted);font-size:12px;margin-top:2px">You typed: <strong>"${step.value}"</strong></div></div>
+        <div><div style="font-weight:600;font-size:14px">${title}</div><div style="color:var(--muted);font-size:12px;margin-top:2px">${sub}</div></div>
         <div style="display:flex;gap:14px">
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;color:var(--primary);white-space:nowrap"><input type="radio" name="st-${i}" value="variable" checked> Variable</label>
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;color:var(--success);white-space:nowrap"><input type="radio" name="st-${i}" value="constant"> Constant</label>
         </div>
       </div>
-      <input class="input" id="vname-${i}" placeholder="Give it a name (e.g. Search Term, Hotel City, Date)" value="${step.label||'input_'+i}" style="font-size:13px">
+      <input class="input" id="vname-${i}" placeholder="Give it a name (e.g. Search Term, Location, Min Salary)" value="${defaultName}" style="font-size:13px">
     `;
     list.appendChild(d);
   });
@@ -736,7 +751,7 @@ async function saveWorkflow(){
   const name=document.getElementById('api-name').value.trim();
   const desc=document.getElementById('api-description').value.trim();
   if(!name) return toast('Please give your API a name.','error');
-  const fills=recSteps.filter(s=>s.type==='fill');
+  const fills=recSteps.filter(s=>s.type==='fill'||s.type==='choice'||s.type==='slider');
   const variables=[]; const constants={};
   fills.forEach((step,i)=>{
     const type=document.querySelector(`[name="st-${i}"]:checked`)?.value||'variable';
@@ -744,18 +759,24 @@ async function saveWorkflow(){
     const idx=recSteps.indexOf(step);
     if(type==='variable'){
       recSteps[idx].isVariable=true; recSteps[idx].variableName=vname;
-      variables.push({name:vname,label:step.label||vname,defaultValue:step.value});
+      if(step.type==='choice'){
+        variables.push({name:vname,label:step.groupName||vname,defaultValue:step.selectedLabel,type:'choice',options:(step.options||[]).map(o=>o.label)});
+      } else if(step.type==='slider'){
+        variables.push({name:vname,label:step.label||vname,defaultValue:step.value,type:'slider',min:step.min,max:step.max});
+      } else {
+        variables.push({name:vname,label:step.label||vname,defaultValue:step.value,type:'text'});
+      }
     } else {
       recSteps[idx].isVariable=false;
-      constants[vname]=step.value;
+      constants[vname]=step.type==='choice'?step.selectedLabel:step.value;
     }
   });
-  const r=await api('POST','/api/workflows',{name,description:desc,url:recSteps.find(s=>s.type==='navigate')?.url||'',steps:recSteps,variables,constants});
+  const r=await api('POST','/api/workflows',{name,description:desc,url:recSteps.find(s=>s.type==='navigate')?.url||'',steps:recSteps,variables,constants,cookies:recCookies});
   if(!r.ok) return toast(r.data.error,'error');
   toast('API saved successfully!','success');
   document.getElementById('rec-review').style.display='none';
   document.getElementById('rec-success').style.display='';
-  recSteps=[];
+  recSteps=[]; recCookies=[];
 }
 
 function resetRecorder(){
@@ -780,26 +801,43 @@ async function loadMyApis(){
   r.data.forEach(w=>grid.appendChild(buildCard(w)));
 }
 
+function apiIcon(name){
+  const n=(name||'').toLowerCase();
+  if(n.includes('flight')||n.includes('ticket')||n.includes('air')) return '✈️';
+  if(n.includes('hotel')||n.includes('stay')||n.includes('book')) return '🏨';
+  if(n.includes('stock')||n.includes('share')||n.includes('dse')) return '📈';
+  if(n.includes('food')||n.includes('restaurant')||n.includes('eat')) return '🍽️';
+  if(n.includes('weather')) return '🌤️';
+  if(n.includes('movie')||n.includes('film')) return '🎬';
+  if(n.includes('news')) return '📰';
+  if(n.includes('shop')||n.includes('price')||n.includes('buy')) return '🛍️';
+  if(n.includes('job')||n.includes('career')) return '💼';
+  if(n.includes('robi')||n.includes('grameenphone')||n.includes('telecom')) return '📱';
+  return '⚡';
+}
+
 function buildCard(w){
   const div=document.createElement('div');
   div.className='api-card';
-  const varChips=(w.variables||[]).map(v=>`<span style="background:rgba(99,102,241,.12);color:var(--primary);padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600">${v.label||v.name}</span>`).join('');
+  const icon=apiIcon(w.name);
+  const lastRun=w.last_run?`Last run ${new Date(w.last_run).toLocaleDateString()}`:`Created ${new Date(w.created_at).toLocaleDateString()}`;
   div.innerHTML=`
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
-      <div style="font-size:15px;font-weight:700;line-height:1.3">${w.name}</div>
-      ${w.is_public?'<span style="background:rgba(16,185,129,.12);color:#10b981;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:600;white-space:nowrap">🌐 Public</span>':'<span style="background:var(--bg);color:var(--muted);padding:3px 10px;border-radius:999px;font-size:11px;white-space:nowrap">🔒 Private</span>'}
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+      <div style="width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,rgba(99,102,241,.2),rgba(168,85,247,.2));display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0">${icon}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:15px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${w.name}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">${lastRun}</div>
+      </div>
+      ${w.is_public?'<span style="background:rgba(16,185,129,.15);color:#10b981;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:600;flex-shrink:0">Public</span>':'<span style="background:rgba(100,116,139,.1);color:var(--muted);padding:3px 9px;border-radius:999px;font-size:11px;flex-shrink:0">Private</span>'}
     </div>
-    ${w.description?`<p style="color:var(--muted);font-size:13px;margin-bottom:10px;line-height:1.5">${w.description}</p>`:''}
-    ${w.url?`<div style="color:var(--muted);font-size:11px;margin-bottom:8px;word-break:break-all">🌐 ${w.url}</div>`:''}
-    ${varChips?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px">${varChips}</div>`:''}
-    <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:14px">
-      <span>▶ ${w.call_count||0} calls · ${w.steps?.length||0} steps</span>
-      <span>${new Date(w.created_at).toLocaleDateString()}</span>
-    </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-primary" style="font-size:13px;padding:7px 14px" onclick='openChat("${w.id}",${JSON.stringify(w.name)},${JSON.stringify(w.variables||[])})'>🤖 Run with AI</button>
-      <button class="btn btn-outline" style="font-size:13px;padding:7px 14px" onclick='openEdit(${JSON.stringify({id:w.id,name:w.name,description:w.description,is_public:w.is_public,price:w.price,price_description:w.price_description})})'>✏️ Edit</button>
-      <button class="btn btn-danger" style="font-size:13px;padding:7px 14px" onclick="delApi('${w.id}')">🗑</button>
+    ${w.description?`<p style="color:var(--muted);font-size:13px;margin-bottom:12px;line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${w.description}</p>`:''}
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <span style="font-size:12px;color:var(--muted)">${w.call_count||0} runs</span>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-primary" style="font-size:13px;padding:8px 18px;border-radius:10px" onclick='openChat("${w.id}",${JSON.stringify(w.name)},${JSON.stringify(w.variables||[])})'>▶ Run</button>
+        <button class="btn btn-outline" style="font-size:13px;padding:8px 12px;border-radius:10px" onclick='openEdit(${JSON.stringify({id:w.id,name:w.name,description:w.description,is_public:w.is_public,price:w.price,price_description:w.price_description})})'>✏️</button>
+        <button class="btn btn-danger" style="font-size:13px;padding:8px 12px;border-radius:10px" onclick="delApi('${w.id}')">🗑</button>
+      </div>
     </div>
   `;
   return div;
@@ -849,9 +887,9 @@ function openChat(id, name, variables){
   document.getElementById('chat-input').value='';
   document.getElementById('chat-input').style.height='44px';
 
-  // Welcome message
-  const examples = buildExamples(name, variables);
-  addMsg('bot', `Hi! I'm your AI assistant for <strong>${name}</strong>.<br><br>Just tell me what you want in plain language. For example:<br>${examples}`);
+  // Welcome message — clean, no variable names
+  const example = buildExamples(name, variables);
+  addMsg('bot', `Hi! I'm your AI assistant for <strong>${name}</strong>.<br><br>Just tell me what you want in plain language:<br><br>${example}`);
 
   document.getElementById('modal-chat').style.display='flex';
   setTimeout(()=>document.getElementById('chat-input').focus(), 100);
@@ -859,22 +897,26 @@ function openChat(id, name, variables){
 
 function buildExamples(name, vars){
   const n = name.toLowerCase();
-  if(n.includes('flight')||n.includes('ticket')||n.includes('sky')||n.includes('travel')){
-    return `<span style="color:var(--primary-light)">"Find me the cheapest flight from Dhaka to London on July 20, returning August 5"</span><br><span style="color:var(--primary-light)">"One way ticket Dhaka to Singapore next Friday"</span>`;
+  const eg = s => `<span style="display:inline-block;background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.2);color:var(--primary);padding:8px 14px;border-radius:10px;font-size:13px;margin-top:4px;cursor:pointer" onclick="document.getElementById('chat-input').value=this.textContent.slice(1,-1);document.getElementById('chat-input').focus()">"${s}"</span>`;
+  if(n.includes('flight')||n.includes('ticket')||n.includes('air')||n.includes('zayaan')||n.includes('travel')||n.includes('sharetrip')){
+    return eg('Find cheapest flight from Dhaka to Cox\'s Bazar on July 10') + '<br>' + eg('One way ticket Dhaka to Sylhet next Friday');
   }
-  if(n.includes('hotel')||n.includes('stay')||n.includes('booking')){
-    return `<span style="color:var(--primary-light)">"Find hotels in Dhaka for 3 nights starting July 15"</span>`;
+  if(n.includes('hotel')||n.includes('stay')||n.includes('book')){
+    return eg('Find hotels in Cox\'s Bazar for 2 nights from July 15');
   }
   if(n.includes('stock')||n.includes('dse')||n.includes('share')){
-    return `<span style="color:var(--primary-light)">"Check price for BEXIMCO"</span>`;
+    return eg('Check today\'s price for BEXIMCO') + '<br>' + eg('Show me SQUARE stock');
   }
-  if(n.includes('movie')||n.includes('imdb')||n.includes('film')){
-    return `<span style="color:var(--primary-light)">"Search for Inception"</span>`;
+  if(n.includes('movie')||n.includes('film')){
+    return eg('Search for Avengers Endgame');
   }
-  if(vars.length){
-    return `<span style="color:var(--primary-light)">"${vars.map(v=>v.label||v.name).join(', ')}"</span>`;
+  if(n.includes('weather')){
+    return eg('What\'s the weather in Dhaka today?');
   }
-  return `<span style="color:var(--primary-light)">"Run it"</span> or describe what you want`;
+  if(n.includes('robi')||n.includes('gp')||n.includes('phone')||n.includes('recharge')){
+    return eg('Check my balance') + '<br>' + eg('Show me internet packages');
+  }
+  return eg(`Run ${name}`) + '<br>' + eg('Tell me what you\'re looking for');
 }
 
 function closeChat(){
@@ -916,35 +958,74 @@ async function sendChat(){
 
   _chatRunning=true;
   document.getElementById('chat-send').disabled=true;
-  setTyping(true,'Understanding your request...');
+  setTyping(true,'Sending...');
 
-  const r=await api('POST','/api/workflows/'+_chatId+'/chat',{message:msg});
+  const chatToken=localStorage.getItem('sapiToken');
+  let resp;
+  try {
+    resp=await fetch('/api/workflows/'+_chatId+'/chat',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+chatToken},
+      body:JSON.stringify({message:msg})
+    });
+  } catch(err){
+    setTyping(false); _chatRunning=false; document.getElementById('chat-send').disabled=false;
+    addMsg('bot','<span style="color:var(--danger)">❌ Network error. Is the server running?</span>');
+    return;
+  }
+
+  if(!resp.ok){
+    setTyping(false); _chatRunning=false; document.getElementById('chat-send').disabled=false;
+    const err=await resp.json().catch(()=>({error:'Something went wrong.'}));
+    addMsg('bot',`<span style="color:var(--danger)">❌ ${err.error||'Something went wrong.'}</span>${err.upgradeRequired?`<br><br><button class="btn btn-primary" onclick="closeChat();showPage('plans')" style="margin-top:8px;font-size:13px">⬆️ Upgrade to Run APIs</button>`:''}`);
+    return;
+  }
+
+  // Read the SSE stream
+  const reader=resp.body.getReader();
+  const dec=new TextDecoder();
+  let buf='', resultData=null;
+
+  try {
+    while(true){
+      const {done,value}=await reader.read();
+      if(done) break;
+      buf+=dec.decode(value,{stream:true});
+      const parts=buf.split('\n\n');
+      buf=parts.pop();
+      for(const part of parts){
+        if(!part.startsWith('data: ')) continue;
+        let evt; try{ evt=JSON.parse(part.slice(6)); }catch{ continue; }
+
+        if(evt.type==='status'){
+          setTyping(true, evt.text);
+        } else if(evt.type==='understood'){
+          addMsg('bot',`✅ <strong>${evt.text}</strong>`);
+          setTyping(true,'Opening browser...');
+        } else if(evt.type==='progress'){
+          setTyping(true, evt.text);
+        } else if(evt.type==='error'){
+          setTyping(false);
+          addMsg('bot',`<span style="color:var(--danger)">❌ ${evt.text}</span>`);
+        } else if(evt.type==='result'){
+          resultData=evt;
+        }
+      }
+    }
+  } catch(_){}
 
   setTyping(false);
   _chatRunning=false;
   document.getElementById('chat-send').disabled=false;
 
-  if(!r.ok){
-    addMsg('bot',`<span style="color:var(--danger)">❌ ${r.data.error||'Something went wrong.'}</span>${r.data.upgradeRequired?`<br><br><button class="btn btn-primary" onclick="closeChat();showPage('plans')" style="margin-top:8px;font-size:13px">⬆️ Upgrade to Run APIs</button>`:''}`);
-    return;
-  }
+  if(!resultData){ document.getElementById('chat-input').focus(); return; }
 
-  const {understood, summary, actionLabel, result} = r.data;
-
-  // Show what the AI understood
-  if(understood){
-    addMsg('bot',`✅ <strong>${understood}</strong>`);
-  }
-
-  setTyping(true,'Browsing the website...');
-  await new Promise(res=>setTimeout(res,200)); // tiny delay for UX
-  setTyping(false);
+  const {summary, actionLabel, result}=resultData;
 
   // Build result bubble
   const resultEl=document.createElement('div');
   resultEl.style.cssText='margin-top:8px';
 
-  // AI summary
   if(summary){
     const summaryDiv=document.createElement('div');
     summaryDiv.style.cssText='background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.2);border-radius:10px;padding:12px 14px;margin-bottom:10px;font-size:13px;line-height:1.6;color:var(--text)';
@@ -967,8 +1048,9 @@ async function sendChat(){
     });
   }
 
-  // Text blocks (flight cards, price results, etc.)
-  const blocks=(result.textBlocks||[]).filter(b=>b.length>5);
+  // Text blocks: prefer the detected repeating results list (job cards, product cards),
+  // falling back to class-name-matched blocks.
+  const blocks=((result.listItems&&result.listItems.length>=3)?result.listItems:(result.textBlocks||[])).filter(b=>b.length>5);
   if(blocks.length && !tables.length){
     const grid=document.createElement('div');
     grid.style.cssText='display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin-bottom:10px';
@@ -981,7 +1063,7 @@ async function sendChat(){
     resultEl.appendChild(grid);
   }
 
-  // Headings if no other content
+  // Headings if nothing else
   if(!tables.length && !blocks.length && result.headings?.length){
     const hDiv=document.createElement('div');
     hDiv.style.cssText='margin-bottom:10px';
@@ -998,21 +1080,30 @@ async function sendChat(){
   const btnRow=document.createElement('div');
   btnRow.style.cssText='display:flex;gap:8px;margin-top:12px;flex-wrap:wrap';
 
-  // Smart action button (opens the result URL)
-  if(result.url && !result.url.includes('localhost')){
+  // Primary action button — only if actionLabel is meaningful (not generic "Search Again")
+  const isGenericLabel = !actionLabel || /^(search again|open page|view results)$/i.test(actionLabel.trim());
+  if(result.url && !result.url.includes('localhost') && !isGenericLabel){
     const viewBtn=document.createElement('a');
     viewBtn.href=result.url; viewBtn.target='_blank';
     viewBtn.className='btn btn-primary';
     viewBtn.style.cssText='font-size:13px;padding:8px 16px;text-decoration:none';
-    viewBtn.textContent=`🔗 ${actionLabel||'View Results'}`;
+    viewBtn.textContent=`🔗 ${actionLabel}`;
+    btnRow.appendChild(viewBtn);
+  } else if(result.url && !result.url.includes('localhost')){
+    // Generic "open page" link — less prominent
+    const viewBtn=document.createElement('a');
+    viewBtn.href=result.url; viewBtn.target='_blank';
+    viewBtn.className='btn btn-outline';
+    viewBtn.style.cssText='font-size:13px;padding:8px 16px;text-decoration:none';
+    viewBtn.textContent='🌐 Open Page';
     btnRow.appendChild(viewBtn);
   }
 
-  // Run again
+  // Try Again button (focuses the chat input for a new message)
   const againBtn=document.createElement('button');
   againBtn.className='btn btn-outline';
   againBtn.style.cssText='font-size:13px;padding:8px 16px';
-  againBtn.textContent='🔄 Search Again';
+  againBtn.textContent='🔄 Try Again';
   againBtn.onclick=()=>{ document.getElementById('chat-input').focus(); };
   btnRow.appendChild(againBtn);
 
