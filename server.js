@@ -1045,14 +1045,44 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
 
     for (const step of stepsToRun) {
       if (step.type === 'navigate') {
+        // Rewrite recorded variable values ONLY inside the query string (?q=colgate → ?q=lifebuoy).
+        // The path must never be touched: product slugs like /products/colgate-maxfresh-...
+        // encode a specific page, and rewriting them fabricates URLs that 404.
         let url = step.url;
-        for (const [varName, recordedVal] of Object.entries(recordedVarValues)) {
-          const newVal = inputs[varName];
-          if (newVal === undefined || String(newVal) === recordedVal) continue;
-          const variants = [recordedVal, encodeURIComponent(recordedVal), encodeURIComponent(recordedVal).replace(/%20/g, '+')];
-          for (const variant of variants) {
-            if (variant && url.includes(variant)) url = url.split(variant).join(encodeURIComponent(String(newVal)));
+        const qIdx = url.indexOf('?');
+        if (qIdx !== -1) {
+          const base = url.slice(0, qIdx);
+          let query = url.slice(qIdx);
+          for (const [varName, recordedVal] of Object.entries(recordedVarValues)) {
+            const newVal = inputs[varName];
+            if (newVal === undefined || String(newVal) === recordedVal) continue;
+            const variants = [recordedVal, encodeURIComponent(recordedVal), encodeURIComponent(recordedVal).replace(/%20/g, '+')];
+            for (const variant of variants) {
+              if (variant && query.includes(variant)) query = query.split(variant).join(encodeURIComponent(String(newVal)));
+            }
           }
+          url = base + query;
+        }
+        // urlParams: choice variables that drive a query parameter (e.g. sort order).
+        // Shape: { sort: { variable: 'Sort', map: { 'Price Low To High': 'priceasc', ... } } }
+        // The AI outputs a human label; we map it to the site's URL token. Empty token = remove param.
+        if (step.urlParams) {
+          try {
+            const u = new URL(url);
+            const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            for (const [param, spec] of Object.entries(step.urlParams)) {
+              const want = inputs[spec.variable];
+              if (want === undefined) continue;
+              let mapped = null;
+              for (const [label, val] of Object.entries(spec.map || {})) {
+                if (norm(label) === norm(want) || norm(label).includes(norm(want)) || norm(want).includes(norm(label))) { mapped = val; break; }
+              }
+              if (mapped === null) continue;
+              if (mapped === '') u.searchParams.delete(param);
+              else u.searchParams.set(param, mapped);
+            }
+            url = u.toString();
+          } catch (_) {}
         }
         const host = (() => { try { return new URL(url).hostname; } catch { return url; } })();
         onProgress?.(`Opening ${host}...`);
@@ -1244,10 +1274,14 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
         // same-tagged, content-sized children — that IS the results list, regardless of the
         // site's framework or class-naming scheme (works even on Angular/React custom elements).
         listItems: (() => {
+          // Only count visible elements — mega-menus and drawers sit hidden in the DOM
+          // with the same "many similar siblings" shape as a results list.
+          const visible = el => { const r = el.getBoundingClientRect(); return r.width > 20 && r.height > 20; };
           const candidates = [];
           document.querySelectorAll('div, ul, ol, section, tbody, main').forEach(parent => {
             if (parent.closest('nav, header, footer, [role="navigation"]')) return;
             const kids = Array.from(parent.children).filter(k => {
+              if (!visible(k)) return false;
               const t = clean(k.textContent);
               return t.length > 30 && t.length < 700;
             });
@@ -1331,11 +1365,12 @@ ${varList}
 User said: "${message}"
 
 Rules:
+- Include EVERY variable listed above as a key in the JSON — no exceptions
 - Use the EXACT variable name as the JSON key (copy it character for character)
 - Convert relative dates to real dates (e.g. "next friday" → "2026-07-03")
 - For origin/destination: include city name as typed, e.g. "Dhaka", "Sylhet", "London"
 - If user doesn't mention a variable, keep its current/example value
-- For "choice" variables, copy one of the listed options exactly — pick whichever is the closest match to what the user wants
+- For "choice" variables, copy one of the listed options exactly — pick whichever best serves the user's intent (e.g. if they want "cheapest" or "lowest price", pick a low-to-high price sort option if one exists)
 - For "number" (range) variables, output a plain number within the given range
 - For password/email fields: always use the example value unchanged
 
@@ -1361,6 +1396,9 @@ Return ONLY this JSON (no other text):
     variables.forEach(v => { inputs[v.name] = v.defaultValue || ''; });
     Object.assign(inputs, constants);
   }
+  // Backfill any variable the AI left out (small models skip keys) with its recorded default
+  variables.forEach(v => { if (inputs[v.name] === undefined) inputs[v.name] = v.defaultValue || ''; });
+  console.log(`[chat] "${w.name}" message="${message}" → inputs=${JSON.stringify(inputs)}`);
   if (!understood) understood = `Running ${w.name}...`;
 
   emit('understood', { text: understood });
