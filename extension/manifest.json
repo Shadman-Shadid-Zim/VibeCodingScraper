@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Shadman's API Recorder",
+  "version": "1.0.0",
+  "description": "Record actions on any website in your own browser and turn them into no-code APIs on Shadman's API platform.",
+  "permissions": ["storage", "tabs", "cookies"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Shadman's API Recorder"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

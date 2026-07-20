@@ -14,6 +14,26 @@ puppeteer.use(StealthPlugin());
 const { v4: uuidv4 } = require('uuid');
 const path           = require('path');
 const cors           = require('cors');
+const crypto         = require('crypto');
+
+// ─── SITE-CREDENTIAL ENCRYPTION ───────────────────────────────────────────────
+// Passwords the platform stores on behalf of end-users (so a marketplace API can log in as
+// THEM, not the API's creator) are encrypted at rest with AES-256-GCM. Never store or log
+// these in plaintext outside this module.
+const CRED_KEY = crypto.createHash('sha256').update(process.env.CRED_ENC_KEY || 'dev-only-insecure-key-set-CRED_ENC_KEY-in-.env').digest();
+function encryptSecret(plain) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', CRED_KEY, iv);
+  const enc = Buffer.concat([cipher.update(String(plain), 'utf8'), cipher.final()]);
+  return Buffer.concat([iv, cipher.getAuthTag(), enc]).toString('base64');
+}
+function decryptSecret(blob) {
+  const buf = Buffer.from(blob, 'base64');
+  const iv = buf.subarray(0, 12), tag = buf.subarray(12, 28), enc = buf.subarray(28);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', CRED_KEY, iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(enc), decipher.final()]).toString('utf8');
+}
 // AI provider: Claude Fable 5 (best quality, needs paid ANTHROPIC_API_KEY) when available,
 // otherwise free Groq (llama-3.1-8b-instant). The app works either way.
 const Anthropic = require('@anthropic-ai/sdk');
@@ -113,7 +133,17 @@ db.exec(`
     call_count INTEGER DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     last_run TEXT,
-    session_cookies TEXT DEFAULT '[]'
+    session_cookies TEXT DEFAULT '[]',
+    auth_mode TEXT DEFAULT 'shared',
+    login_domain TEXT DEFAULT ''
+  );
+  CREATE TABLE IF NOT EXISTS site_credentials (
+    user_id TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    email TEXT NOT NULL,
+    password_enc TEXT NOT NULL,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, domain)
   );
   CREATE TABLE IF NOT EXISTS purchases (
     id TEXT PRIMARY KEY,
@@ -137,6 +167,18 @@ db.exec(`
 `);
 // Safely add session_cookies column if upgrading from an older DB
 try { db.exec('ALTER TABLE workflows ADD COLUMN session_cookies TEXT DEFAULT "[]"'); } catch (_) {}
+// Recordings uploaded from the Chrome extension, waiting for review in the web app (one per user)
+db.exec(`
+  CREATE TABLE IF NOT EXISTS pending_recordings (
+    user_id TEXT PRIMARY KEY,
+    steps TEXT NOT NULL,
+    cookies TEXT DEFAULT '[]',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+try { db.exec("ALTER TABLE pending_recordings ADD COLUMN cookies TEXT DEFAULT '[]'"); } catch (_) {}
+try { db.exec("ALTER TABLE workflows ADD COLUMN auth_mode TEXT DEFAULT 'shared'"); } catch (_) {}
+try { db.exec("ALTER TABLE workflows ADD COLUMN login_domain TEXT DEFAULT ''"); } catch (_) {}
 
 // ─── EMAIL ────────────────────────────────────────────────────────────────────
 const mailer = nodemailer.createTransport({
@@ -351,6 +393,28 @@ function safeUser(u) {
   return { id: u.id, name: u.name, email: u.email, plan: u.plan, avatar: u.avatar, plan_expires_at: u.plan_expires_at, has_seen_plans: u.has_seen_plans };
 }
 
+// ─── SITE CREDENTIALS (per-user logins for "each user connects their own account" APIs) ──────
+// Passwords are encrypted (see encryptSecret/decryptSecret) and NEVER sent back to the client.
+app.get('/api/credentials', requireAuth, (req, res) => {
+  const rows = db.prepare('SELECT domain, email, updated_at FROM site_credentials WHERE user_id=?').all(req.user.id);
+  res.json(rows);
+});
+
+app.post('/api/credentials', requireAuth, (req, res) => {
+  const { domain, email, password } = req.body;
+  if (!domain || !email || !password) return res.status(400).json({ error: 'Domain, email, and password are all required.' });
+  const cleanDomain = domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '');
+  db.prepare(`INSERT INTO site_credentials (user_id, domain, email, password_enc, updated_at) VALUES (?,?,?,?,CURRENT_TIMESTAMP)
+              ON CONFLICT(user_id, domain) DO UPDATE SET email=excluded.email, password_enc=excluded.password_enc, updated_at=CURRENT_TIMESTAMP`)
+    .run(req.user.id, cleanDomain, email, encryptSecret(password));
+  res.json({ success: true });
+});
+
+app.delete('/api/credentials/:domain', requireAuth, (req, res) => {
+  db.prepare('DELETE FROM site_credentials WHERE user_id=? AND domain=?').run(req.user.id, req.params.domain);
+  res.json({ success: true });
+});
+
 // ─── PAYMENT ROUTES ───────────────────────────────────────────────────────────
 const PRICES = { monthly: 299, yearly: 2499 };
 
@@ -562,6 +626,8 @@ app.post('/api/recording/start', requireAuth, checkUsageLimit, async (req, res) 
             const settling = Date.now() < settleUntil;
             document.querySelectorAll(FIELD_SELECTOR).forEach(el => {
               if (el.closest('#__sapi_bar')) return;
+              // Invisible fields are analytics/tracking forms the site fills in the background — never user input
+              if (el.offsetWidth === 0 && el.offsetHeight === 0) return;
               const val = getVal(el);
               if (!val || val.length > 300) return;
               const sel = generateSelector(el);
@@ -602,6 +668,16 @@ app.post('/api/recording/start', requireAuth, checkUsageLimit, async (req, res) 
                 updateCount();
                 return;
               }
+            }
+
+            // A standalone checkbox (no group) is an on/off toggle — e.g. "Fresher only",
+            // "Free shipping", "Include out of stock". Recorded with its post-click state so
+            // the AI can later flip it either way ("only fresher jobs" → on).
+            if (optionInput && optionInput.type === 'checkbox') {
+              const ts = generateOptionSelector(optionInput);
+              window.__recordAction({ type: 'toggle', selector: ts, matchIndex: getMatchIndex(optionInput, ts), newState: optionInput.checked, label: getOptionLabel(optionInput) });
+              updateCount();
+              return;
             }
 
             // Some app-built filter menus (React/Angular dropdown panels) have no real form inputs
@@ -893,10 +969,47 @@ app.post('/api/recording/stop/:sessionId', requireAuth, async (req, res) => {
   res.json({ success: true, steps: cleanRecordedSteps(steps), cookies: sessionCookies });
 });
 
+// ─── EXTENSION RECORDING IMPORT ───────────────────────────────────────────────
+// The Chrome extension records in the USER'S browser (works from anywhere) and
+// uploads steps here; the web app's Record page then offers them for review.
+app.post('/api/recording/import', requireAuth, (req, res) => {
+  const steps = Array.isArray(req.body.steps) ? req.body.steps : [];
+  const cookies = Array.isArray(req.body.cookies) ? req.body.cookies : [];
+  if (!steps.length) return res.status(400).json({ error: 'No steps provided.' });
+  const clean = cleanRecordedSteps(steps);
+  db.prepare(`INSERT INTO pending_recordings (user_id, steps, cookies, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+              ON CONFLICT(user_id) DO UPDATE SET steps=excluded.steps, cookies=excluded.cookies, created_at=CURRENT_TIMESTAMP`)
+    .run(req.user.id, JSON.stringify(clean), JSON.stringify(cookies));
+  logUsage(req.user.id, 'record');
+  res.json({ success: true, stepCount: clean.length });
+});
+
+app.get('/api/recording/pending', requireAuth, (req, res) => {
+  const row = db.prepare('SELECT steps, cookies, created_at FROM pending_recordings WHERE user_id=?').get(req.user.id);
+  res.json(row ? { steps: JSON.parse(row.steps), cookies: JSON.parse(row.cookies || '[]'), created_at: row.created_at } : { steps: null });
+});
+
+app.delete('/api/recording/pending', requireAuth, (req, res) => {
+  db.prepare('DELETE FROM pending_recordings WHERE user_id=?').run(req.user.id);
+  res.json({ success: true });
+});
+
 // ─── WORKFLOW ROUTES ──────────────────────────────────────────────────────────
+// A step marked as a per-user credential field is never replayed with its own recorded value
+// (replay always looks the running user's own login up from site_credentials) — so the literal
+// password/email the creator typed while recording it is never needed again. Strip it wherever
+// steps are written OR read, so it can't linger in the database or leak to anyone who fetches
+// the workflow (e.g. a marketplace buyer via /api/my-purchased).
+function scrubCredentialSteps(steps) {
+  return (steps || []).map(s =>
+    (s.variableName === '__credential_password' || s.variableName === '__credential_email')
+      ? { ...s, value: '' }
+      : s
+  );
+}
 const parseWf = (w) => w ? ({
   ...w,
-  steps:     JSON.parse(w.steps     || '[]'),
+  steps:     scrubCredentialSteps(JSON.parse(w.steps || '[]')),
   variables: JSON.parse(w.variables || '[]'),
   constants: JSON.parse(w.constants || '{}'),
 }) : null;
@@ -906,11 +1019,12 @@ app.get('/api/workflows', requireAuth, (req, res) => {
 });
 
 app.post('/api/workflows', requireAuth, (req, res) => {
-  const { name, description, url, steps, variables, constants, cookies } = req.body;
+  const { name, description, url, steps, variables, constants, cookies, authMode, loginDomain } = req.body;
   if (!name) return res.status(400).json({ error: 'API name is required.' });
+  const cleanSteps = scrubCredentialSteps(steps);
   const id = uuidv4();
-  db.prepare('INSERT INTO workflows (id,user_id,name,description,url,steps,variables,constants,session_cookies) VALUES (?,?,?,?,?,?,?,?,?)')
-    .run(id, req.user.id, name, description || '', url || '', JSON.stringify(steps || []), JSON.stringify(variables || []), JSON.stringify(constants || {}), JSON.stringify(cookies || []));
+  db.prepare('INSERT INTO workflows (id,user_id,name,description,url,steps,variables,constants,session_cookies,auth_mode,login_domain) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+    .run(id, req.user.id, name, description || '', url || '', JSON.stringify(cleanSteps), JSON.stringify(variables || []), JSON.stringify(constants || {}), JSON.stringify(cookies || []), authMode === 'per_user' ? 'per_user' : 'shared', loginDomain || '');
   res.json({ success: true, workflow: parseWf(db.prepare('SELECT * FROM workflows WHERE id=?').get(id)) });
 });
 
@@ -937,6 +1051,16 @@ app.delete('/api/workflows/:id', requireAuth, (req, res) => {
   res.json({ success: true });
 });
 
+// For 'per_user' auth workflows, each running user must have saved their OWN login for the
+// site (Settings → Saved Site Logins) — we never fall back to the creator's session for these.
+// Returns { credentialInputs } on success, or throws a user-facing error message.
+function resolvePerUserLogin(w, userId) {
+  if (w.auth_mode !== 'per_user') return null;
+  const row = db.prepare('SELECT email, password_enc FROM site_credentials WHERE user_id=? AND domain=?').get(userId, w.login_domain);
+  if (!row) throw new Error(`This API needs your own login for ${w.login_domain || 'this site'}. Save it once in Settings → Saved Site Logins, then try again.`);
+  return { __credential_email: row.email, __credential_password: decryptSecret(row.password_enc) };
+}
+
 app.post('/api/workflows/:id/call', requireAuth, checkUsageLimit, async (req, res) => {
   const w = db.prepare('SELECT * FROM workflows WHERE id=?').get(req.params.id);
   if (!w) return res.status(404).json({ error: 'API not found.' });
@@ -946,15 +1070,20 @@ app.post('/api/workflows/:id/call', requireAuth, checkUsageLimit, async (req, re
   if (!isOwner && !bought && w.price > 0) return res.status(403).json({ error: 'Purchase this API first.' });
   if (req.user.plan === 'free') return res.status(403).json({ error: 'Calling APIs requires a paid plan. Please upgrade.', upgradeRequired: true });
 
+  let credentialInputs;
+  try { credentialInputs = resolvePerUserLogin(w, req.user.id); }
+  catch (err) { return res.status(400).json({ error: err.message, needsLogin: true, loginDomain: w.login_domain }); }
+
   logUsage(req.user.id, 'call', w.id);
   db.prepare('UPDATE workflows SET call_count=call_count+1, last_run=CURRENT_TIMESTAMP WHERE id=?').run(w.id);
 
-  const steps     = JSON.parse(w.steps     || '[]');
-  const constants = JSON.parse(w.constants || '{}');
-  const inputs    = { ...constants, ...(req.body.inputs || {}) };
+  const steps      = JSON.parse(w.steps     || '[]');
+  const constants   = JSON.parse(w.constants || '{}');
+  const inputs      = { ...constants, ...(req.body.inputs || {}), ...(credentialInputs || {}) };
+  const savedCookies = credentialInputs ? [] : JSON.parse(w.session_cookies || '[]');
 
   try {
-    const result = await replayWorkflow(steps, inputs);
+    const result = await replayWorkflow(steps, inputs, savedCookies);
     res.json({ success: true, result });
   } catch (err) {
     res.status(500).json({ error: 'Execution failed: ' + err.message });
@@ -969,8 +1098,10 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
   ];
   const executablePath = chromePaths.find(p => fsp.existsSync(p));
 
+  // HEADLESS=1 (cloud deployment: no display on the server). Default stays headful
+  // locally — a visible browser evades bot detection better and demos well.
   const browser = await puppeteer.launch({
-    headless: false,
+    headless: process.env.HEADLESS === '1' ? 'new' : false,
     executablePath,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled', '--window-size=1280,800', '--window-position=50,50'],
   });
@@ -1043,25 +1174,43 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
       if (s.type === 'fill' && s.isVariable && s.variableName && s.value) recordedVarValues[s.variableName] = s.value;
     }
 
+    // Set right after a click that itself caused a real navigation (e.g. clicking a search-result
+    // card, or a search button that submits a form). The NEXT recorded step is very often the
+    // 'navigate' that click produced during recording — but replaying it as a literal page.goto()
+    // to that exact recorded URL would override wherever the live click just correctly went (e.g.
+    // forcing every run back to the ONE product that happened to be recorded, regardless of the
+    // search term this run actually used). Trust the click's real navigation instead.
+    let skipNextNavigate = false;
+
     for (const step of stepsToRun) {
+      const shouldSkipThisNavigate = step.type === 'navigate' && skipNextNavigate;
+      skipNextNavigate = false;
       if (step.type === 'navigate') {
+        if (shouldSkipThisNavigate) continue;
         // Rewrite recorded variable values ONLY inside the query string (?q=colgate → ?q=lifebuoy).
         // The path must never be touched: product slugs like /products/colgate-maxfresh-...
         // encode a specific page, and rewriting them fabricates URLs that 404.
+        //
+        // This operates on REAL, decoded query parameters (via URL/searchParams) and replaces a
+        // param's WHOLE value — never a raw substring splice across the query string. A splice-based
+        // approach breaks the moment the recorded fill snapshot doesn't exactly match what actually
+        // ended up in the URL (e.g. recorded value "dove" when the real search was "dove soap" —
+        // autocomplete completed it, or the snapshot fired before typing finished): splicing only
+        // "dove" leaves the stray "soap" glued onto the new term, producing a broken hybrid query.
+        // Matching by prefix and replacing the full param value avoids that class of corruption.
         let url = step.url;
-        const qIdx = url.indexOf('?');
-        if (qIdx !== -1) {
-          const base = url.slice(0, qIdx);
-          let query = url.slice(qIdx);
-          for (const [varName, recordedVal] of Object.entries(recordedVarValues)) {
-            const newVal = inputs[varName];
-            if (newVal === undefined || String(newVal) === recordedVal) continue;
-            const variants = [recordedVal, encodeURIComponent(recordedVal), encodeURIComponent(recordedVal).replace(/%20/g, '+')];
-            for (const variant of variants) {
-              if (variant && query.includes(variant)) query = query.split(variant).join(encodeURIComponent(String(newVal)));
+        if (url.includes('?')) {
+          try {
+            const u = new URL(url);
+            for (const [varName, recordedVal] of Object.entries(recordedVarValues)) {
+              const newVal = inputs[varName];
+              if (newVal === undefined || String(newVal) === recordedVal || !recordedVal) continue;
+              for (const [key, val] of [...u.searchParams.entries()]) {
+                if (val.startsWith(recordedVal) || recordedVal.startsWith(val)) u.searchParams.set(key, String(newVal));
+              }
             }
-          }
-          url = base + query;
+            url = u.toString();
+          } catch (_) {}
         }
         // urlParams: choice variables that drive a query parameter (e.g. sort order).
         // Shape: { sort: { variable: 'Sort', map: { 'Price Low To High': 'priceasc', ... } } }
@@ -1090,6 +1239,11 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
         await new Promise(r => setTimeout(r, 1500));
         if (await isBotBlocked()) throw new Error('BOT_BLOCKED:' + url);
       } else if (step.type === 'click') {
+        // Optional actions (Add to Cart, Buy Now, Apply...) run only when the user asked for them.
+        if (step.isOptionalAction) {
+          const want = String(inputs[step.actionName] ?? 'no').trim();
+          if (!/^(y|yes|true|1|do|ok|confirm)/i.test(want)) continue;
+        }
         const label = step.label || step.selector.replace(/[#.[\]"'=]/g,' ').trim().slice(0,30);
         onProgress?.(`Clicking "${label}"...`);
         await page.waitForSelector(step.selector, { timeout: 3000 }).catch(() => {});
@@ -1111,11 +1265,13 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
             if (target) { await target.scrollIntoView().catch(() => {}); await target.click().catch(() => {}); disambiguated = true; }
           }
         } catch (_) {}
+        const urlBeforeClick = page.url();
         if (!disambiguated) await page.click(step.selector).catch(() => {});
         await Promise.race([
           page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 4000 }).catch(() => {}),
           new Promise(r => setTimeout(r, 250)),
         ]);
+        skipNextNavigate = page.url() !== urlBeforeClick;
       } else if (step.type === 'fill') {
         let value = step.value;
         if (step.isVariable && step.variableName) {
@@ -1238,6 +1394,24 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
             }
           }
         }
+      } else if (step.type === 'toggle') {
+        // On/off checkbox: honor the requested state (variable) or the recorded one,
+        // clicking only if the current state differs.
+        let desired = !!step.newState;
+        if (step.isVariable && step.variableName && inputs[step.variableName] !== undefined) {
+          desired = /^(y|yes|true|on|1|check)/i.test(String(inputs[step.variableName]).trim());
+        }
+        onProgress?.(`${desired ? 'Enabling' : 'Disabling'} "${step.label || 'option'}"...`);
+        await page.waitForSelector(step.selector, { timeout: 3000 }).catch(() => {});
+        const tEl = await pickEl(step);
+        if (tEl) {
+          const cur = await tEl.evaluate(el => !!el.checked).catch(() => null);
+          if (cur !== null && cur !== desired) {
+            await tEl.scrollIntoView().catch(() => {});
+            await tEl.click().catch(() => {});
+          }
+        }
+        await new Promise(r => setTimeout(r, 400));
       }
     }
     onProgress?.('Extracting results...');
@@ -1274,9 +1448,15 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
         // same-tagged, content-sized children — that IS the results list, regardless of the
         // site's framework or class-naming scheme (works even on Angular/React custom elements).
         listItems: (() => {
-          // Only count visible elements — mega-menus and drawers sit hidden in the DOM
-          // with the same "many similar siblings" shape as a results list.
-          const visible = el => { const r = el.getBoundingClientRect(); return r.width > 20 && r.height > 20; };
+          // Only count truly visible elements — mega-menus and drawers sit hidden in the DOM
+          // (display:none, visibility:hidden, opacity:0, or parked off-screen) with the same
+          // "many similar siblings" shape as a results list.
+          const visible = el => {
+            try { if (el.checkVisibility && !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false; } catch (_) {}
+            const r = el.getBoundingClientRect();
+            if (r.right <= 0 || r.bottom <= 0) return false;
+            return r.width > 20 && r.height > 20;
+          };
           const candidates = [];
           document.querySelectorAll('div, ul, ol, section, tbody, main').forEach(parent => {
             if (parent.closest('nav, header, footer, [role="navigation"]')) return;
@@ -1330,6 +1510,10 @@ app.post('/api/workflows/:id/chat', requireAuth, async (req, res) => {
     if (cnt >= 500) return res.status(429).json({ error: 'Monthly limit reached!', upgradeRequired: true });
   }
 
+  let credentialInputs;
+  try { credentialInputs = resolvePerUserLogin(w, req.user.id); }
+  catch (err) { return res.status(400).json({ error: err.message, needsLogin: true, loginDomain: w.login_domain }); }
+
   const { message } = req.body;
   if (!message?.trim()) return res.status(400).json({ error: 'No message provided.' });
 
@@ -1339,7 +1523,7 @@ app.post('/api/workflows/:id/chat', requireAuth, async (req, res) => {
 
   const variables    = JSON.parse(w.variables     || '[]');
   const constants    = JSON.parse(w.constants     || '{}');
-  const savedCookies = JSON.parse(w.session_cookies || '[]');
+  const savedCookies = credentialInputs ? [] : JSON.parse(w.session_cookies || '[]');
 
   // ── Step 1: Understand the request with Claude ─────────────────────────────
   let inputs = {}, understood = '';
@@ -1350,6 +1534,8 @@ app.post('/api/workflows/:id/chat', requireAuth, async (req, res) => {
         ? variables.map(v => {
             if (v.type === 'choice') return `  - ${v.name}: label="${v.label||v.name}", type=choice, must be one of [${(v.options||[]).map(o=>`"${o}"`).join(', ')}], current="${v.defaultValue||''}"`;
             if (v.type === 'slider') return `  - ${v.name}: label="${v.label||v.name}", type=number, range ${v.min}-${v.max}, current=${v.defaultValue}`;
+            if (v.type === 'toggle') return `  - ${v.name}: label="${v.label||v.name}", type=on/off toggle, answer "yes" or "no", current="${v.defaultValue||'no'}"`;
+            if (v.type === 'action') return `  - ${v.name}: label="${v.label||v.name}", type=action — answer "yes" ONLY if the user explicitly asks to ${v.label||v.name}, otherwise "no"`;
             return `  - ${v.name}: label="${v.label||v.name}", example="${v.defaultValue||''}"`;
           }).join('\n')
         : '  (no variables — runs the same every time)';
@@ -1372,6 +1558,8 @@ Rules:
 - If user doesn't mention a variable, keep its current/example value
 - For "choice" variables, copy one of the listed options exactly — pick whichever best serves the user's intent (e.g. if they want "cheapest" or "lowest price", pick a low-to-high price sort option if one exists)
 - For "number" (range) variables, output a plain number within the given range
+- For "toggle" variables: "yes" or "no" based on what the user wants
+- For "action" variables (like add to cart, buy, apply): "yes" when the user requests that action in any wording ("add 3 to cart", "put it in my cart", "buy it" → yes). "no" only if they did not ask for it
 - For password/email fields: always use the example value unchanged
 
 Return ONLY this JSON (no other text):
@@ -1398,7 +1586,16 @@ Return ONLY this JSON (no other text):
   }
   // Backfill any variable the AI left out (small models skip keys) with its recorded default
   variables.forEach(v => { if (inputs[v.name] === undefined) inputs[v.name] = v.defaultValue || ''; });
-  console.log(`[chat] "${w.name}" message="${message}" → inputs=${JSON.stringify(inputs)}`);
+  // Deterministic safety net for actions: if the user's message plainly contains the action's
+  // label words ("add ... to cart"), honor it even when a weak model answered "no".
+  const msgLower = ` ${message.toLowerCase()} `;
+  variables.forEach(v => {
+    if (v.type !== 'action') return;
+    const words = String(v.label || v.name).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    if (words.length && words.every(wd => msgLower.includes(wd))) inputs[v.name] = 'yes';
+  });
+  if (credentialInputs) Object.assign(inputs, credentialInputs);
+  console.log(`[chat] "${w.name}" message="${message}" → inputs=${JSON.stringify({ ...inputs, __credential_password: inputs.__credential_password ? '(hidden)' : undefined })}`);
   if (!understood) understood = `Running ${w.name}...`;
 
   emit('understood', { text: understood });
@@ -1469,7 +1666,10 @@ Last line must be: ACTION: [2-3 word action label e.g. "Book Cheapest", "View Fl
     actionLabel = 'Open Page';
   }
 
-  emit('result', { summary, actionLabel, result, inputsUsed: inputs });
+  // Never echo credential values back to the browser, even the owning user's own — it's an
+  // unnecessary trip for a secret to take, and this payload could end up in client-side logs.
+  const { __credential_email, __credential_password, ...inputsUsed } = inputs;
+  emit('result', { summary, actionLabel, result, inputsUsed });
   res.end();
 });
 
@@ -1515,6 +1715,30 @@ app.get('/api/my-purchased', requireAuth, (req, res) => {
 // ─── USERS (admin) ────────────────────────────────────────────────────────────
 app.get('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
   res.json(db.prepare('SELECT id,name,email,plan,plan_expires_at,created_at FROM users ORDER BY created_at DESC').all());
+});
+
+// Owner-only manual access grant — bypasses payment entirely (requireAdmin already restricts
+// this to exactly ADMIN_EMAIL; no other user can reach or even see this feature).
+app.get('/api/admin/users/search', requireAuth, requireAdmin, (req, res) => {
+  const q = `%${(req.query.q || '').trim()}%`;
+  const rows = db.prepare('SELECT id,name,email,plan,plan_expires_at,created_at FROM users WHERE email LIKE ? OR name LIKE ? ORDER BY created_at DESC LIMIT 20').all(q, q);
+  res.json(rows);
+});
+
+const ADMIN_GRANTABLE_PLANS = ['free', 'monthly', 'yearly'];
+app.post('/api/admin/users/:id/grant', requireAuth, requireAdmin, (req, res) => {
+  const { plan, months } = req.body;
+  if (!ADMIN_GRANTABLE_PLANS.includes(plan)) return res.status(400).json({ error: 'Plan must be free, monthly, or yearly.' });
+  const user = db.prepare('SELECT * FROM users WHERE id=?').get(req.params.id);
+  if (!user) return res.status(404).json({ error: 'User not found.' });
+
+  let expires = null;
+  if (plan !== 'free') {
+    expires = new Date();
+    expires.setMonth(expires.getMonth() + (parseInt(months, 10) || (plan === 'yearly' ? 12 : 1)));
+  }
+  db.prepare('UPDATE users SET plan=?, plan_expires_at=? WHERE id=?').run(plan, expires ? expires.toISOString() : null, user.id);
+  res.json({ success: true, user: { id: user.id, email: user.email, plan, plan_expires_at: expires ? expires.toISOString() : null } });
 });
 
 // ─── SPA FALLBACK ─────────────────────────────────────────────────────────────

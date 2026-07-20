@@ -399,6 +399,7 @@
     <div style="display:flex;gap:8px;margin-bottom:24px;background:var(--surface);padding:4px;border-radius:10px;border:1px solid var(--border);width:fit-content">
       <button class="tab-btn active" id="atab-pending" onclick="adminSwitch('pending',this)">Pending</button>
       <button class="tab-btn" id="atab-all" onclick="adminSwitch('all',this)">All Payments</button>
+      <button class="tab-btn" id="atab-grant" onclick="adminSwitch('grant',this)">Grant Access</button>
     </div>
     <div id="admin-list" style="display:flex;flex-direction:column;gap:12px"><div style="text-align:center;padding:40px;color:var(--muted)">Loading...</div></div>
   </div>
@@ -418,11 +419,27 @@
         <button class="btn btn-outline" style="width:100%" onclick="showPage('plans')">⬆️ Upgrade Plan</button>
       </div>
     </div>
-    <div class="card">
+    <div class="card" style="margin-bottom:16px">
       <h3 style="font-weight:700;margin-bottom:16px;font-size:15px">Appearance</h3>
       <div style="display:flex;align-items:center;justify-content:space-between">
         <span style="font-size:14px">Theme</span>
         <button class="btn btn-outline" onclick="toggleTheme()" id="settings-theme-btn" style="font-size:13px">🌙 Dark Mode</button>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:16px">
+      <h3 style="font-weight:700;margin-bottom:8px;font-size:15px">🧩 Chrome Extension</h3>
+      <p style="color:var(--muted);font-size:13px;margin-bottom:14px;line-height:1.6">Record any website from your own browser. If you signed in with Google, use this token to connect the extension: open the extension popup → "Use a token instead" → paste.</p>
+      <button class="btn btn-primary" style="width:100%" onclick="copyText(token,'Extension token')">📋 Copy Extension Token</button>
+    </div>
+    <div class="card">
+      <h3 style="font-weight:700;margin-bottom:8px;font-size:15px">🔐 Saved Site Logins</h3>
+      <p style="color:var(--muted);font-size:13px;margin-bottom:14px;line-height:1.6">For APIs marked "ask each person to connect their own account" — save your login here once, and it's used automatically (and only for your own runs). Passwords are encrypted; you can't view them again, only replace or remove them.</p>
+      <div id="creds-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px"></div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <input class="input" id="cred-domain" placeholder="Site (e.g. daraz.com.bd)" style="font-size:13px">
+        <input class="input" id="cred-email" placeholder="Your email or phone on that site" style="font-size:13px">
+        <input class="input" id="cred-password" type="password" placeholder="Your password on that site" style="font-size:13px">
+        <button class="btn btn-primary" onclick="saveSiteCredential()">💾 Save Login</button>
       </div>
     </div>
   </div>
@@ -539,6 +556,19 @@ function showPage(name){
   if(name==='marketplace') loadMarketplace();
   if(name==='admin')       loadAdmin();
   if(name==='settings')    loadSettings();
+  if(name==='recorder')    checkPendingImport();
+}
+
+// A recording uploaded from the Chrome extension waits server-side — pull it into the review screen.
+async function checkPendingImport(){
+  const r=await api('GET','/api/recording/pending');
+  if(r.ok && r.data.steps && r.data.steps.length){
+    recSteps=r.data.steps; recCookies=r.data.cookies||[];
+    document.getElementById('rec-start').style.display='none';
+    document.getElementById('rec-progress').style.display='none';
+    showReview(recSteps);
+    toast('Recording imported from the Chrome extension! Review and save it below.','success');
+  }
 }
 
 // ── AUTH ─────────────────────────────────────────────────────────────────────
@@ -698,22 +728,69 @@ async function stopRecording(){
   showReview(recSteps);
 }
 
+// Clicks that look like meaningful action buttons (Add to Cart, Buy Now, Apply...) —
+// offered in review as "only do this when the user asks" options.
+function actionCandidates(steps){
+  return steps.filter(s=>s.type==='click' && (
+    /cart|buy|order|checkout|book|apply|subscribe|wishlist|purchase|add/i.test(s.label||'') ||
+    ((s.tag==='button'||s.tag==='a') && (s.label||'').length>2 && (s.label||'').length<40)
+  ));
+}
+
+// Detects an actual recorded login-form fill (password field + a nearby email/username field) —
+// only present if the creator recorded the real login steps, not just an already-logged-in cookie.
+function findLoginFields(steps){
+  const pwIdx=steps.findIndex(s=>s.type==='fill'&&s.inputType==='password');
+  if(pwIdx===-1) return null;
+  let emailIdx=-1;
+  for(let i=pwIdx-1;i>=0&&i>pwIdx-6;i--){
+    const s=steps[i];
+    if(s.type==='fill'&&(s.inputType==='email'||/email|user|phone/i.test(s.label||'')||/email|user|phone/i.test(s.selector||''))){emailIdx=i;break;}
+  }
+  return {pwIdx, emailIdx};
+}
+
 function showReview(steps){
   document.getElementById('rec-progress').style.display='none';
   document.getElementById('rec-review').style.display='';
   const list=document.getElementById('steps-list');
   list.innerHTML='';
-  const fills=steps.filter(s=>s.type==='fill'||s.type==='choice'||s.type==='slider');
+  const login=findLoginFields(steps);
+  const loginIdx=new Set();
+  if(login){loginIdx.add(login.pwIdx); if(login.emailIdx!==-1)loginIdx.add(login.emailIdx);}
+  const fills=steps.filter((s,idx)=>(s.type==='fill'||s.type==='choice'||s.type==='slider'||s.type==='toggle')&&!loginIdx.has(idx));
   const nav=steps.filter(s=>s.type==='navigate').length;
   const clicks=steps.filter(s=>s.type==='click').length;
-  if(!fills.length){
-    list.innerHTML=`<div style="color:var(--muted);font-size:13px;padding:14px;background:var(--bg);border-radius:10px;line-height:1.6">
+  const hasLoginChoice=recCookies.length>0||login;
+
+  if(hasLoginChoice){
+    const firstNav=steps.find(s=>s.type==='navigate');
+    let domain=''; try{domain=new URL(firstNav?.url||'').hostname.replace(/^www\./,'');}catch(_){}
+    const d=document.createElement('div');
+    d.style.cssText='background:var(--bg);border:1px solid var(--primary);border-radius:12px;padding:16px;margin-bottom:14px';
+    d.innerHTML=`
+      <div style="font-weight:700;font-size:14px;margin-bottom:6px">🔒 This site needs a login</div>
+      <div style="color:var(--muted);font-size:12px;margin-bottom:12px;line-height:1.6">How should logging in work when this API runs?</div>
+      <label style="display:flex;gap:10px;align-items:flex-start;margin-bottom:10px;cursor:pointer">
+        <input type="radio" name="login-mode" value="shared" checked style="margin-top:3px">
+        <span style="font-size:13px"><strong>Use my login for every run</strong><br><span style="color:var(--muted);font-size:12px">Simplest. Whoever runs this API acts as your account on ${domain||'this site'} — fine for personal use, risky if you publish it to the marketplace.</span></span>
+      </label>
+      <label style="display:flex;gap:10px;align-items:flex-start;cursor:${login?'pointer':'not-allowed'};opacity:${login?'1':'0.5'}">
+        <input type="radio" name="login-mode" value="per_user" ${login?'':'disabled'} style="margin-top:3px">
+        <span style="font-size:13px"><strong>Ask each person to connect their own account</strong><br><span style="color:var(--muted);font-size:12px">${login?`Safe for sharing — each user saves their own ${domain||'site'} login once in Settings, used only for their own runs.`:`Not available here: you were already logged in when recording, so no login step was captured. To offer this, log out and record the actual login (type email + password) as part of the flow.`}</span></span>
+      </label>
+    `;
+    list.appendChild(d);
+  }
+
+  if(!fills.length&&!actionCandidates(steps).length){
+    if(!hasLoginChoice) list.innerHTML=`<div style="color:var(--muted);font-size:13px;padding:14px;background:var(--bg);border-radius:10px;line-height:1.6">
       Recorded <strong>${steps.length} actions</strong>: ${nav} page visit${nav!==1?'s':''}, ${clicks} click${clicks!==1?'s':''}.
       No form fields filled — this API will replay the exact same clicks each time.
     </div>`;
     return;
   }
-  list.innerHTML=`<div style="font-size:12px;color:var(--muted);margin-bottom:8px">Recorded ${steps.length} total actions including ${fills.length} field${fills.length!==1?'s':''}/filter${fills.length!==1?'s':''}. Label each one:</div>`;
+  list.insertAdjacentHTML('beforeend',`<div style="font-size:12px;color:var(--muted);margin-bottom:8px">Recorded ${steps.length} total actions including ${fills.length} field${fills.length!==1?'s':''}/filter${fills.length!==1?'s':''}. Label each one:</div>`);
   fills.forEach((step,i)=>{
     const realIdx=steps.indexOf(step);
     const d=document.createElement('div');
@@ -728,6 +805,10 @@ function showReview(steps){
       title=step.label||'Range';
       sub=`You set it to: <strong>${step.value}</strong> (range ${step.min}–${step.max})`;
       defaultName=step.label||('range_'+i);
+    } else if(step.type==='toggle'){
+      title=step.label||'Checkbox';
+      sub=`You turned it <strong>${step.newState?'ON':'OFF'}</strong> — as a Variable, the AI can switch it either way on request`;
+      defaultName=step.label||('toggle_'+i);
     } else {
       title=step.label||step.selector;
       sub=`You typed: <strong>"${step.value}"</strong>`;
@@ -745,13 +826,41 @@ function showReview(steps){
     `;
     list.appendChild(d);
   });
+
+  // Action-button clicks: default = replay every time (current behavior).
+  // "Only when asked" turns the click into an AI-gated action ("...and add it to cart").
+  const acts=actionCandidates(steps);
+  if(acts.length){
+    const hdr=document.createElement('div');
+    hdr.style.cssText='font-size:12px;color:var(--muted);margin:16px 0 8px';
+    hdr.innerHTML=`<strong style="color:var(--text)">Buttons you clicked</strong> — choose when each should happen:`;
+    list.appendChild(hdr);
+    acts.forEach((step,i)=>{
+      const d=document.createElement('div');
+      d.style.cssText='background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:16px;';
+      d.innerHTML=`
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+          <div><div style="font-weight:600;font-size:14px">🔘 ${step.label||'Button'}</div><div style="color:var(--muted);font-size:12px;margin-top:2px">A button you clicked during recording</div></div>
+          <div style="display:flex;gap:14px">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;color:var(--success);white-space:nowrap"><input type="radio" name="act-${i}" value="always" checked> Always click</label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;color:var(--warning,#f59e0b);white-space:nowrap"><input type="radio" name="act-${i}" value="ask"> Only when asked</label>
+          </div>
+        </div>
+        <input class="input" id="aname-${i}" placeholder="Action name (e.g. Add to Cart, Buy Now, Apply)" value="${step.label||'action_'+i}" style="font-size:13px">
+      `;
+      list.appendChild(d);
+    });
+  }
 }
 
 async function saveWorkflow(){
   const name=document.getElementById('api-name').value.trim();
   const desc=document.getElementById('api-description').value.trim();
   if(!name) return toast('Please give your API a name.','error');
-  const fills=recSteps.filter(s=>s.type==='fill'||s.type==='choice'||s.type==='slider');
+  const login=findLoginFields(recSteps);
+  const loginIdx=new Set();
+  if(login){loginIdx.add(login.pwIdx); if(login.emailIdx!==-1)loginIdx.add(login.emailIdx);}
+  const fills=recSteps.filter((s,idx)=>(s.type==='fill'||s.type==='choice'||s.type==='slider'||s.type==='toggle')&&!loginIdx.has(idx));
   const variables=[]; const constants={};
   fills.forEach((step,i)=>{
     const type=document.querySelector(`[name="st-${i}"]:checked`)?.value||'variable';
@@ -763,16 +872,44 @@ async function saveWorkflow(){
         variables.push({name:vname,label:step.groupName||vname,defaultValue:step.selectedLabel,type:'choice',options:(step.options||[]).map(o=>o.label)});
       } else if(step.type==='slider'){
         variables.push({name:vname,label:step.label||vname,defaultValue:step.value,type:'slider',min:step.min,max:step.max});
+      } else if(step.type==='toggle'){
+        variables.push({name:vname,label:step.label||vname,defaultValue:step.newState?'yes':'no',type:'toggle'});
       } else {
         variables.push({name:vname,label:step.label||vname,defaultValue:step.value,type:'text'});
       }
     } else {
       recSteps[idx].isVariable=false;
-      constants[vname]=step.type==='choice'?step.selectedLabel:step.value;
+      constants[vname]=step.type==='choice'?step.selectedLabel:(step.type==='toggle'?(step.newState?'yes':'no'):step.value);
     }
   });
-  const r=await api('POST','/api/workflows',{name,description:desc,url:recSteps.find(s=>s.type==='navigate')?.url||'',steps:recSteps,variables,constants,cookies:recCookies});
+  // Action buttons marked "only when asked" become AI-gated yes/no variables
+  actionCandidates(recSteps).forEach((step,i)=>{
+    const mode=document.querySelector(`[name="act-${i}"]:checked`)?.value||'always';
+    if(mode==='ask'){
+      const aname=document.getElementById(`aname-${i}`)?.value.trim()||`action_${i}`;
+      const idx=recSteps.indexOf(step);
+      recSteps[idx].isOptionalAction=true; recSteps[idx].actionName=aname;
+      variables.push({name:aname,label:step.label||aname,defaultValue:'no',type:'action'});
+    }
+  });
+  let authMode='shared', loginDomain='';
+  const loginModeEl=document.querySelector('[name="login-mode"]:checked');
+  if(loginModeEl) authMode=loginModeEl.value;
+  const firstNav=recSteps.find(s=>s.type==='navigate');
+  try{ loginDomain=new URL(firstNav?.url||'').hostname.replace(/^www\./,''); }catch(_){}
+
+  let cookiesToSend=recCookies;
+  if(authMode==='per_user'&&login){
+    // Recorded login fields become special credential variables, resolved server-side from
+    // each running user's own saved login instead of the AI or the creator's session.
+    recSteps[login.pwIdx].isVariable=true; recSteps[login.pwIdx].variableName='__credential_password';
+    if(login.emailIdx!==-1){ recSteps[login.emailIdx].isVariable=true; recSteps[login.emailIdx].variableName='__credential_email'; }
+    cookiesToSend=[];
+  }
+
+  const r=await api('POST','/api/workflows',{name,description:desc,url:recSteps.find(s=>s.type==='navigate')?.url||'',steps:recSteps,variables,constants,cookies:cookiesToSend,authMode,loginDomain});
   if(!r.ok) return toast(r.data.error,'error');
+  api('DELETE','/api/recording/pending');
   toast('API saved successfully!','success');
   document.getElementById('rec-review').style.display='none';
   document.getElementById('rec-success').style.display='';
@@ -780,6 +917,7 @@ async function saveWorkflow(){
 }
 
 function resetRecorder(){
+  api('DELETE','/api/recording/pending');
   clearInterval(recTimer); recId=null; recSteps=[];
   document.getElementById('rec-start').style.display='';
   document.getElementById('rec-progress').style.display='none';
@@ -977,7 +1115,7 @@ async function sendChat(){
   if(!resp.ok){
     setTyping(false); _chatRunning=false; document.getElementById('chat-send').disabled=false;
     const err=await resp.json().catch(()=>({error:'Something went wrong.'}));
-    addMsg('bot',`<span style="color:var(--danger)">❌ ${err.error||'Something went wrong.'}</span>${err.upgradeRequired?`<br><br><button class="btn btn-primary" onclick="closeChat();showPage('plans')" style="margin-top:8px;font-size:13px">⬆️ Upgrade to Run APIs</button>`:''}`);
+    addMsg('bot',`<span style="color:var(--danger)">❌ ${err.error||'Something went wrong.'}</span>${err.upgradeRequired?`<br><br><button class="btn btn-primary" onclick="closeChat();showPage('plans')" style="margin-top:8px;font-size:13px">⬆️ Upgrade to Run APIs</button>`:''}${err.needsLogin?`<br><br><button class="btn btn-primary" onclick="closeChat();showPage('settings')" style="margin-top:8px;font-size:13px">🔐 Save My ${err.loginDomain||'Site'} Login</button>`:''}`);
     return;
   }
 
@@ -1173,9 +1311,11 @@ function adminSwitch(f,el){
 }
 
 async function loadAdmin(){
+  const list=document.getElementById('admin-list');
+  if(adminFilter==='grant') return renderGrantAccess(list);
+
   const r=await api('GET','/api/admin/payments');
   if(!r.ok) return;
-  const list=document.getElementById('admin-list');
   const items=adminFilter==='pending'?r.data.filter(p=>p.status==='pending'):r.data;
   list.innerHTML='';
   if(!items.length){
@@ -1205,6 +1345,57 @@ async function adminAct(id,action){
   loadAdmin();
 }
 
+// Owner-only: manually grant a subscription to any user by email, bypassing payment entirely.
+// This whole tab only renders for the admin account (page is gated by requireAdmin server-side
+// too — a non-admin hitting these endpoints gets a 403, not just a hidden button).
+function renderGrantAccess(list){
+  list.innerHTML=`
+    <div class="card">
+      <h3 style="font-weight:700;margin-bottom:8px;font-size:15px">🔑 Grant Access Manually</h3>
+      <p style="color:var(--muted);font-size:13px;margin-bottom:14px;line-height:1.6">Search a user by email or name and set their plan directly — no payment needed. Only visible to you.</p>
+      <div style="display:flex;gap:8px;margin-bottom:16px">
+        <input class="input" id="grant-search" placeholder="Search by Gmail or name..." style="font-size:13px" onkeydown="if(event.key==='Enter')searchGrantUsers()">
+        <button class="btn btn-primary" onclick="searchGrantUsers()" style="white-space:nowrap">Search</button>
+      </div>
+      <div id="grant-results" style="display:flex;flex-direction:column;gap:10px"></div>
+    </div>
+  `;
+}
+
+async function searchGrantUsers(){
+  const q=document.getElementById('grant-search').value.trim();
+  const results=document.getElementById('grant-results');
+  results.innerHTML=`<div style="color:var(--muted);font-size:13px">Searching...</div>`;
+  const r=await api('GET','/api/admin/users/search?q='+encodeURIComponent(q));
+  if(!r.ok){ results.innerHTML=`<div style="color:var(--danger)">${r.data.error||'Search failed.'}</div>`; return; }
+  if(!r.data.length){ results.innerHTML=`<div style="color:var(--muted);font-size:13px">No users found.</div>`; return; }
+  results.innerHTML=r.data.map(u=>`
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+      <div>
+        <div style="font-weight:600;font-size:14px">${u.name} <span style="color:var(--muted);font-weight:400;font-size:12px">${u.email}</span></div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px">Current: <strong style="color:var(--text)">${u.plan}</strong>${u.plan_expires_at?' · expires '+new Date(u.plan_expires_at).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}):''}</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select class="input" id="grant-plan-${u.id}" style="font-size:12px;padding:8px;width:auto">
+          <option value="free">Free</option>
+          <option value="monthly">Monthly</option>
+          <option value="yearly" selected>Yearly</option>
+        </select>
+        <button class="btn btn-success" style="font-size:12px;padding:8px 14px;white-space:nowrap" onclick="grantPlan('${u.id}','${u.email}')">✅ Grant</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function grantPlan(userId,email){
+  const plan=document.getElementById('grant-plan-'+userId).value;
+  if(!confirm(`Set ${email} to the ${plan} plan?`)) return;
+  const r=await api('POST',`/api/admin/users/${userId}/grant`,{plan, months: plan==='yearly'?120:1});
+  if(!r.ok) return toast(r.data.error,'error');
+  toast(`${email} is now on the ${plan} plan!`,'success');
+  searchGrantUsers();
+}
+
 // ── SETTINGS ─────────────────────────────────────────────────────────────────
 function loadSettings(){
   if(!currentUser) return;
@@ -1217,6 +1408,39 @@ function loadSettings(){
   document.getElementById('settings-expires').textContent=currentUser.plan_expires_at
     ?new Date(currentUser.plan_expires_at).toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'})
     :currentUser.plan==='free'?'No expiry (free plan)':'—';
+  loadSiteCredentials();
+}
+
+async function loadSiteCredentials(){
+  const r=await api('GET','/api/credentials');
+  const el=document.getElementById('creds-list');
+  if(!r.ok||!r.data.length){ el.innerHTML=`<div style="color:var(--muted);font-size:12px">No saved logins yet.</div>`; return; }
+  el.innerHTML=r.data.map(c=>`
+    <div style="display:flex;align-items:center;justify-content:space-between;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 12px">
+      <div><div style="font-size:13px;font-weight:600">${c.domain}</div><div style="font-size:11px;color:var(--muted)">${c.email}</div></div>
+      <button class="btn btn-ghost" style="font-size:12px;padding:4px 10px" onclick="deleteSiteCredential('${c.domain}')">Remove</button>
+    </div>
+  `).join('');
+}
+
+async function saveSiteCredential(){
+  const domain=document.getElementById('cred-domain').value.trim();
+  const email=document.getElementById('cred-email').value.trim();
+  const password=document.getElementById('cred-password').value;
+  if(!domain||!email||!password) return toast('Fill in the site, email, and password.','error');
+  const r=await api('POST','/api/credentials',{domain,email,password});
+  if(!r.ok) return toast(r.data.error,'error');
+  document.getElementById('cred-domain').value='';
+  document.getElementById('cred-email').value='';
+  document.getElementById('cred-password').value='';
+  toast('Login saved!','success');
+  loadSiteCredentials();
+}
+
+async function deleteSiteCredential(domain){
+  const r=await api('DELETE','/api/credentials/'+encodeURIComponent(domain));
+  if(!r.ok) return toast(r.data.error,'error');
+  loadSiteCredentials();
 }
 
 // ── MODALS ────────────────────────────────────────────────────────────────────
@@ -1232,7 +1456,11 @@ async function init(){
   if(params.get('error')==='google-failed'){ toast('Google sign-in failed. Try again.','error'); window.history.replaceState({},'','/'); }
   if(token){
     const r=await api('GET','/api/auth/me');
-    if(r.ok){ currentUser=r.data; await afterLogin(r.data); }
+    if(r.ok){
+      currentUser=r.data; await afterLogin(r.data);
+      // Deep link from the Chrome extension: /#recorder opens the Record page (imported recording loads there)
+      if(window.location.hash==='#recorder') showPage('recorder');
+    }
     else { token=null; localStorage.removeItem('sapiToken'); }
   }
 }
