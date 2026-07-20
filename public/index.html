@@ -463,6 +463,16 @@
       <div style="margin-bottom:14px"><label class="label">Price (৳ BDT, 0 = free)</label><input class="input" type="number" id="edit-price" min="0" placeholder="0"></div>
       <div style="margin-bottom:14px"><label class="label">Tell buyers what this API does</label><textarea class="input" id="edit-price-desc" rows="3" placeholder="What website does it work on? What inputs does it need? What data does it return?"></textarea></div>
     </div>
+    <div id="edit-vars-section" style="margin-bottom:14px;display:none">
+      <label class="label">Variable Names</label>
+      <p style="color:var(--muted);font-size:12px;margin:2px 0 10px">Rename any field the AI fills in — useful if recording left duplicate or unclear names like "input".</p>
+      <div id="edit-vars-list" style="display:flex;flex-direction:column;gap:8px"></div>
+    </div>
+    <div id="edit-consts-section" style="margin-bottom:14px;display:none">
+      <label class="label">Constant Values</label>
+      <p style="color:var(--muted);font-size:12px;margin:2px 0 10px">Fields always filled the same way every run (e.g. your name, email, phone). Fix the actual value here — the name label is just for your own reference.</p>
+      <div id="edit-consts-list" style="display:flex;flex-direction:column;gap:8px"></div>
+    </div>
     <div style="display:flex;gap:12px;margin-top:22px">
       <button class="btn btn-primary" onclick="saveEdit()" style="flex:1">Save Changes</button>
       <button class="btn btn-ghost" onclick="closeModal('modal-edit')">Cancel</button>
@@ -860,11 +870,22 @@ async function saveWorkflow(){
   const login=findLoginFields(recSteps);
   const loginIdx=new Set();
   if(login){loginIdx.add(login.pwIdx); if(login.emailIdx!==-1)loginIdx.add(login.emailIdx);}
-  const fills=recSteps.filter((s,idx)=>(s.type==='fill'||s.type==='choice'||s.type==='slider'||s.type==='toggle')&&!loginIdx.has(idx));
+  const fills=recSteps.filter((s,idx)=>(s.type==='fill'||s.type==='choice'||s.type==='slider'||s.type==='toggle'||s.type==='autocomplete'||s.type==='date')&&!loginIdx.has(idx));
   const variables=[]; const constants={};
+  // Guarantees no two fields ever silently share an identity — if the default name (or a name
+  // left unedited) collides with another field's, auto-append " 2", " 3"... rather than let two
+  // unrelated fields answer to the same key. This has repeatedly caused the AI to type ONE value
+  // into MULTIPLE different fields when names were left as duplicate defaults like "input".
+  const usedNames=new Set();
+  const uniqueName=(base)=>{
+    let candidate=base||'field', n=2;
+    while(usedNames.has(candidate)) candidate=`${base} ${n++}`;
+    usedNames.add(candidate);
+    return candidate;
+  };
   fills.forEach((step,i)=>{
     const type=document.querySelector(`[name="st-${i}"]:checked`)?.value||'variable';
-    const vname=document.getElementById(`vname-${i}`)?.value.trim()||`input_${i}`;
+    const vname=uniqueName(document.getElementById(`vname-${i}`)?.value.trim()||`input_${i}`);
     const idx=recSteps.indexOf(step);
     if(type==='variable'){
       recSteps[idx].isVariable=true; recSteps[idx].variableName=vname;
@@ -886,7 +907,7 @@ async function saveWorkflow(){
   actionCandidates(recSteps).forEach((step,i)=>{
     const mode=document.querySelector(`[name="act-${i}"]:checked`)?.value||'always';
     if(mode==='ask'){
-      const aname=document.getElementById(`aname-${i}`)?.value.trim()||`action_${i}`;
+      const aname=uniqueName(document.getElementById(`aname-${i}`)?.value.trim()||`action_${i}`);
       const idx=recSteps.indexOf(step);
       recSteps[idx].isOptionalAction=true; recSteps[idx].actionName=aname;
       variables.push({name:aname,label:step.label||aname,defaultValue:'no',type:'action'});
@@ -973,7 +994,7 @@ function buildCard(w){
       <span style="font-size:12px;color:var(--muted)">${w.call_count||0} runs</span>
       <div style="display:flex;gap:6px">
         <button class="btn btn-primary" style="font-size:13px;padding:8px 18px;border-radius:10px" onclick='openChat("${w.id}",${JSON.stringify(w.name)},${JSON.stringify(w.variables||[])})'>▶ Run</button>
-        <button class="btn btn-outline" style="font-size:13px;padding:8px 12px;border-radius:10px" onclick='openEdit(${JSON.stringify({id:w.id,name:w.name,description:w.description,is_public:w.is_public,price:w.price,price_description:w.price_description})})'>✏️</button>
+        <button class="btn btn-outline" style="font-size:13px;padding:8px 12px;border-radius:10px" onclick='openEdit(${JSON.stringify({id:w.id,name:w.name,description:w.description,is_public:w.is_public,price:w.price,price_description:w.price_description,variables:w.variables||[],constants:w.constants||{}})})'>✏️</button>
         <button class="btn btn-danger" style="font-size:13px;padding:8px 12px;border-radius:10px" onclick="delApi('${w.id}')">🗑</button>
       </div>
     </div>
@@ -999,17 +1020,61 @@ function openEdit(w){
   document.getElementById('pub-yes').checked=w.is_public==1;
   document.getElementById('pub-no').checked=w.is_public!=1;
   document.getElementById('mkt-fields').style.display=w.is_public?'':'none';
+
+  const vars=w.variables||[];
+  const section=document.getElementById('edit-vars-section');
+  const list=document.getElementById('edit-vars-list');
+  if(vars.length){
+    section.style.display='';
+    list.innerHTML=vars.map((v,i)=>`
+      <div style="display:flex;align-items:center;gap:8px">
+        <input class="input" id="editvar-${i}" value="${(v.name||'').replace(/"/g,'&quot;')}" style="font-size:13px;flex:1">
+        <span style="color:var(--muted);font-size:11px;white-space:nowrap">was typed: "${String(v.defaultValue||'').replace(/"/g,'&quot;').slice(0,30)}"</span>
+      </div>
+    `).join('');
+  } else {
+    section.style.display='none';
+    list.innerHTML='';
+  }
+
+  const consts=Object.entries(w.constants||{});
+  const csection=document.getElementById('edit-consts-section');
+  const clist=document.getElementById('edit-consts-list');
+  if(consts.length){
+    csection.style.display='';
+    clist.innerHTML=consts.map(([k,v],i)=>`
+      <div style="display:flex;align-items:center;gap:8px">
+        <input class="input" id="editconstlabel-${i}" value="${String(k).replace(/"/g,'&quot;')}" style="font-size:12px;width:35%;color:var(--muted)" placeholder="Label">
+        <input class="input" id="editconstvalue-${i}" value="${String(v).replace(/"/g,'&quot;')}" style="font-size:13px;flex:1" placeholder="Value">
+      </div>
+    `).join('');
+  } else {
+    csection.style.display='none';
+    clist.innerHTML='';
+  }
   openModal('modal-edit');
 }
 
 async function saveEdit(){
   const id=document.getElementById('edit-id').value;
+  const vars=_editData.variables||[];
+  // Positional, NOT name-keyed — recordings can end up with duplicate variable names (e.g. two
+  // fields both literally named "input"), which a name->name rename map couldn't tell apart.
+  // The server matches this array to variable-marked steps in the same original order.
+  const newNames=vars.map((v,i)=>document.getElementById(`editvar-${i}`)?.value.trim()||v.name);
+
+  const constEntries=Object.entries(_editData.constants||{});
+  const newConstLabels=constEntries.map((_,i)=>document.getElementById(`editconstlabel-${i}`)?.value.trim()||constEntries[i][0]);
+  const newConstValues=constEntries.map((_,i)=>document.getElementById(`editconstvalue-${i}`)?.value??constEntries[i][1]);
+
   const r=await api('PUT','/api/workflows/'+id,{
     name:document.getElementById('edit-name').value,
     description:document.getElementById('edit-desc').value,
     is_public:document.getElementById('pub-yes').checked,
     price:parseInt(document.getElementById('edit-price').value)||0,
     price_description:document.getElementById('edit-price-desc').value,
+    renameVariables:vars.length?newNames:undefined,
+    updateConstants:constEntries.length?{labels:newConstLabels,values:newConstValues}:undefined,
   });
   if(!r.ok) return toast(r.data.error,'error');
   toast('Saved!','success'); closeModal('modal-edit'); loadMyApis();

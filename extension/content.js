@@ -128,6 +128,80 @@
         return;
       }
 
+      // Accessible ARIA radio groups (role="radio" inside role="radiogroup") — a common pattern
+      // for custom-styled radio buttons (Google Forms among many others) that native
+      // input[type=radio] detection above doesn't see at all. data-value (when present) is a
+      // clean option label; aria-label is often noisy (a full sentence with a duplicated
+      // description appended after a comma), so prefer data-value and trim aria-label at the
+      // first comma as a fallback.
+      const ariaRadioEl = e.target.closest('[role="radio"]');
+      if (ariaRadioEl && !optionInput) {
+        const group = ariaRadioEl.closest('[role="radiogroup"]') || ariaRadioEl.parentElement;
+        const getAriaRadioLabel = (el) => {
+          const dv = el.getAttribute('data-value');
+          if (dv) return dv.trim().slice(0, 60);
+          const al = el.getAttribute('aria-label');
+          if (al) return al.split(',')[0].trim().slice(0, 60);
+          return el.textContent.trim().slice(0, 60);
+        };
+        const radios = group ? Array.from(group.querySelectorAll('[role="radio"]')) : [ariaRadioEl];
+        if (radios.length > 1) {
+          const options = [...new Set(radios.map(getAriaRadioLabel))].filter(Boolean);
+          if (options.length > 1) {
+            send({
+              type: 'choice',
+              mode: 'text',
+              groupName: group?.getAttribute('aria-label') || 'Option',
+              options: options.map(label => ({ label })),
+              selectedLabel: getAriaRadioLabel(ariaRadioEl),
+              label: group?.getAttribute('aria-label') || 'Option',
+            });
+            return;
+          }
+        }
+      }
+
+      // Calendar date-cell pick — accessible date pickers commonly label each day cell with a
+      // full, parseable date in aria-label (e.g. "Wednesday, August 5, 2026"), a far more
+      // reliable signal than DOM position: which cell holds "the 5th" shifts every month, and
+      // which month is even showing depends on today's date. Recorded as a portable calendar
+      // date instead of a DOM position/selector.
+      const DATE_LABEL_RE = /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\b/i;
+      const dateLabelEl = e.target.closest('[aria-label]');
+      if (dateLabelEl && !optionInput) {
+        const m = (dateLabelEl.getAttribute('aria-label') || '').match(DATE_LABEL_RE);
+        if (m) {
+          const iso = new Date(`${m[1]} ${m[2]}, ${m[3]}`).toISOString().slice(0, 10);
+          if (!isNaN(new Date(iso))) {
+            send({ type: 'date', value: iso, label: 'Date' });
+            return;
+          }
+        }
+      }
+
+      // ARIA combobox / typeahead suggestion pick (role="combobox" input with
+      // aria-expanded/aria-controls driving a live, dynamically-generated option list) — common
+      // for location/search-as-you-type fields. The options only exist because of what was just
+      // typed, so hardcoding them at record time breaks replay for a different requested value.
+      // Recorded as "typed into field X, picked a suggestion" — replay re-types the requested
+      // value fresh and clicks whatever suggestion comes back live.
+      const optionRoleEl = e.target.closest('[role="option"]');
+      if (optionRoleEl && !optionInput) {
+        const comboEl = document.querySelector('[role="combobox"][aria-expanded="true"]');
+        if (comboEl) {
+          const cs = generateSelector(comboEl);
+          send({
+            type: 'autocomplete',
+            selector: cs,
+            matchIndex: getMatchIndex(comboEl, cs),
+            value: comboEl.value || '',
+            selectedLabel: optionRoleEl.textContent.trim().slice(0, 80),
+            label: getLabel(comboEl),
+          });
+          return;
+        }
+      }
+
       const optionEl = e.target.closest('li, [role="option"], [role="menuitem"]');
       if (optionEl && !optionInput) {
         const container = optionEl.parentElement;
@@ -149,6 +223,25 @@
             return;
           }
         }
+      }
+
+      // Accessible ARIA checkboxes (role="checkbox") — the same custom-widget pattern as the
+      // ARIA radio group above (Google Forms' "Checkboxes" question type, among others), which
+      // native input[type=checkbox] detection can't see at all. Unlike radios these are
+      // independent multi-select toggles, not a mutually-exclusive group, so each is its own
+      // toggle step. There's no real selector to replay against, so it's matched by label text
+      // at replay time the same way ARIA-radio text-mode options are. aria-checked is read after
+      // a short delay since custom widgets (React state updates) may not reflect the new state
+      // synchronously inside this capture-phase listener.
+      const ariaCheckboxEl = e.target.closest('[role="checkbox"]');
+      if (ariaCheckboxEl && !optionInput) {
+        const dv = ariaCheckboxEl.getAttribute('data-value');
+        const al = ariaCheckboxEl.getAttribute('aria-label');
+        const label = (dv || (al ? al.split(',')[0] : '') || ariaCheckboxEl.textContent).trim().slice(0, 60);
+        setTimeout(() => {
+          send({ type: 'toggle', mode: 'text', label: label || 'Option', newState: ariaCheckboxEl.getAttribute('aria-checked') === 'true' });
+        }, 50);
+        return;
       }
 
       const sel = generateSelector(e.target);
@@ -196,6 +289,11 @@
       if (!active) return;
       const el = e.target;
       if (!['INPUT', 'TEXTAREA'].includes(el.tagName) && !el.isContentEditable) return;
+      // Read now — focusout only fires when you've genuinely left the field (unlike 'click',
+      // which can also fire from a framework's own internal interactions mid-typing), so typing
+      // is already done and the value is safe to capture immediately. Also read again shortly
+      // after in case a React-style form reformats/validates the value right after blur.
+      snapshotAll();
       setTimeout(snapshotAll, 300);
     }, true);
 

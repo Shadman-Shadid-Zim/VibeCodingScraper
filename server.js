@@ -34,6 +34,19 @@ function decryptSecret(blob) {
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(enc), decipher.final()]).toString('utf8');
 }
+
+// Recorded session cookies are full login credentials in every practical sense (some are the
+// exact token that proves an authenticated session — no password needed) so they're encrypted at
+// rest the same way as saved site logins. encryptCookies/decryptCookiesField also transparently
+// read plain, unencrypted JSON from rows written before this existed.
+function encryptCookies(cookiesArray) {
+  return encryptSecret(JSON.stringify(cookiesArray || []));
+}
+function decryptCookiesField(raw) {
+  if (!raw) return [];
+  try { return JSON.parse(decryptSecret(raw)); } catch (_) {}
+  try { return JSON.parse(raw); } catch (_) { return []; }
+}
 // AI provider: Claude Fable 5 (best quality, needs paid ANTHROPIC_API_KEY) when available,
 // otherwise free Groq (llama-3.1-8b-instant). The app works either way.
 const Anthropic = require('@anthropic-ai/sdk');
@@ -684,6 +697,88 @@ app.post('/api/recording/start', requireAuth, checkUsageLimit, async (req, res) 
             // behind them at all — just a list of clickable text items with app-internal state.
             // Detect that shape (a clicked list item with 2+ text siblings) and match by visible text
             // at replay time instead of a selector, since there's no [name]/[value] to key off.
+            // Accessible ARIA radio groups (role="radio" inside role="radiogroup") — a common
+            // pattern for custom-styled radio buttons (Google Forms among many others) that
+            // native input[type=radio] detection above doesn't see at all. data-value (when
+            // present) is a clean option label; aria-label is often noisy (a full sentence with
+            // a duplicated description appended after a comma), so prefer data-value and trim
+            // aria-label at the first comma as a fallback.
+            const ariaRadioEl = e.target.closest('[role="radio"]');
+            if (ariaRadioEl && !optionInput) {
+              const group = ariaRadioEl.closest('[role="radiogroup"]') || ariaRadioEl.parentElement;
+              const getAriaRadioLabel = (el) => {
+                const dv = el.getAttribute('data-value');
+                if (dv) return dv.trim().slice(0, 60);
+                const al = el.getAttribute('aria-label');
+                if (al) return al.split(',')[0].trim().slice(0, 60);
+                return el.textContent.trim().slice(0, 60);
+              };
+              const radios = group ? Array.from(group.querySelectorAll('[role="radio"]')) : [ariaRadioEl];
+              if (radios.length > 1) {
+                const options = [...new Set(radios.map(getAriaRadioLabel))].filter(Boolean);
+                if (options.length > 1) {
+                  window.__recordAction({
+                    type: 'choice',
+                    mode: 'text',
+                    groupName: group?.getAttribute('aria-label') || 'Option',
+                    options: options.map(label => ({ label })),
+                    selectedLabel: getAriaRadioLabel(ariaRadioEl),
+                    label: group?.getAttribute('aria-label') || 'Option',
+                  });
+                  updateCount();
+                  return;
+                }
+              }
+            }
+
+            // Calendar date-cell pick — accessible date pickers (MUI X Date Pickers among many
+            // others) commonly label each day cell with a full, parseable date in aria-label
+            // (e.g. "Wednesday, August 5, 2026", sometimes prefixed with availability text). This
+            // is a much more reliable signal than position: which cell holds "the 5th" shifts
+            // every month, and which month is even showing depends on today's date, so a
+            // positional/selector-based replay would drift the moment the workflow is reused on a
+            // different day. Recorded as a portable calendar date instead of a DOM position.
+            const DATE_LABEL_RE = /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\b/i;
+            const dateLabelEl = e.target.closest('[aria-label]');
+            if (dateLabelEl && !optionInput) {
+              const m = (dateLabelEl.getAttribute('aria-label') || '').match(DATE_LABEL_RE);
+              if (m) {
+                const iso = new Date(`${m[1]} ${m[2]}, ${m[3]}`).toISOString().slice(0, 10);
+                if (!isNaN(new Date(iso))) {
+                  window.__recordAction({ type: 'date', value: iso, label: 'Date' });
+                  updateCount();
+                  return;
+                }
+              }
+            }
+
+            // ARIA combobox / typeahead suggestion pick (role="combobox" input with
+            // aria-expanded/aria-controls driving a live, dynamically-generated option list) —
+            // extremely common for location/search-as-you-type fields (airport pickers, address
+            // fields, tag inputs...). Unlike a static filter menu, the options here only exist
+            // because of whatever text was just typed — hardcoding the recorded option list would
+            // break the moment a DIFFERENT value is requested at replay (e.g. typing "Kolkata"
+            // shows only Kolkata airports; asking for "Chennai" later would match nothing against
+            // that stale list). Recorded instead as "typed into field X, picked a suggestion" —
+            // replay re-types the requested value fresh and clicks whatever suggestion comes back.
+            const optionRoleEl = e.target.closest('[role="option"]');
+            if (optionRoleEl && !optionInput) {
+              const comboEl = document.querySelector('[role="combobox"][aria-expanded="true"]');
+              if (comboEl) {
+                const cs = generateSelector(comboEl);
+                window.__recordAction({
+                  type: 'autocomplete',
+                  selector: cs,
+                  matchIndex: getMatchIndex(comboEl, cs),
+                  value: comboEl.value || '',
+                  selectedLabel: optionRoleEl.textContent.trim().slice(0, 80),
+                  label: getLabel(comboEl),
+                });
+                updateCount();
+                return;
+              }
+            }
+
             const optionEl = e.target.closest('li, [role="option"], [role="menuitem"]');
             if (optionEl && !optionInput) {
               const container = optionEl.parentElement;
@@ -706,6 +801,25 @@ app.post('/api/recording/start', requireAuth, checkUsageLimit, async (req, res) 
                   return;
                 }
               }
+            }
+
+            // Accessible ARIA checkboxes (role="checkbox") — same custom-widget pattern as the
+            // ARIA radio group above (Google Forms' "Checkboxes" question type, among others),
+            // invisible to native input[type=checkbox] detection. These are independent
+            // multi-select toggles, not a mutually-exclusive group, so each is recorded as its
+            // own toggle step, matched by label text at replay (no real selector exists).
+            // aria-checked is read after a short delay in case the widget's own state update
+            // isn't synchronous with this capture-phase listener.
+            const ariaCheckboxEl = e.target.closest('[role="checkbox"]');
+            if (ariaCheckboxEl && !optionInput) {
+              const dv = ariaCheckboxEl.getAttribute('data-value');
+              const al = ariaCheckboxEl.getAttribute('aria-label');
+              const label = (dv || (al ? al.split(',')[0] : '') || ariaCheckboxEl.textContent).trim().slice(0, 60);
+              setTimeout(() => {
+                window.__recordAction({ type: 'toggle', mode: 'text', label: label || 'Option', newState: ariaCheckboxEl.getAttribute('aria-checked') === 'true' });
+                updateCount();
+              }, 50);
+              return;
             }
 
             const sel = generateSelector(e.target);
@@ -756,11 +870,16 @@ app.post('/api/recording/start', requireAuth, checkUsageLimit, async (req, res) 
             }
           }).observe(document.body, { attributes: true, attributeFilter: ['aria-valuenow'], subtree: true });
 
-          // Snapshot when focus leaves a field (catches typing without clicking away)
+          // Snapshot when focus leaves a field (catches typing without clicking away). Read now —
+          // focusout only fires once you've genuinely left the field (unlike 'click', which can
+          // also fire from a framework's own internal interactions mid-typing and would capture
+          // an incomplete value) — then again shortly after in case the page reformats/validates
+          // the value right after blur.
           document.addEventListener('focusout', (e) => {
             const el = e.target;
             if (!['INPUT','TEXTAREA'].includes(el.tagName) && !el.isContentEditable) return;
             if (el.closest('#__sapi_bar')) return;
+            snapshotAll();
             setTimeout(snapshotAll, 300);
           }, true);
 
@@ -937,6 +1056,45 @@ function cleanRecordedSteps(steps) {
     (s.type !== 'fill' && s.type !== 'slider') || lastPos.get(s.type + '|' + s.selector + '|' + (s.matchIndex || 0)) === i
   );
 
+  // Step 5: Drop repeat navigates to a page path already visited (query string ignored). Many
+  // sites (Daraz among them) fire a second, harmless "soft" navigate shortly after a product page
+  // loads — tracking params or slug normalization, not a real page change. If kept, it survives as
+  // a hardcoded page.goto() that permanently overrides wherever a later run's search actually leads,
+  // since it isn't directly preceded by the click that reaches the product (something else — often
+  // a small icon/stepper click — sits in between), so the "trust the click's live navigation" replay
+  // safeguard doesn't catch it. Keeping only the FIRST visit to a path removes the duplicate outright.
+  const seenPaths = new Set();
+  clean = clean.filter(s => {
+    if (s.type !== 'navigate') return true;
+    let pathKey;
+    try { const u = new URL(s.url); pathKey = u.hostname + u.pathname; } catch { pathKey = s.url; }
+    if (seenPaths.has(pathKey)) return false;
+    seenPaths.add(pathKey);
+    return true;
+  });
+
+  // Step 6: Drop a generic 'click' immediately followed by a 'choice' selecting the SAME label.
+  // This happens when a click lands on a label/text element that sits next to — but isn't inside
+  // — the actual interactive control (e.g. Google Forms' custom radio buttons render their text
+  // as a sibling div, not a descendant), so the click is recorded twice: once as an unrecognized
+  // generic click, then again correctly as a choice selection. Replaying both double-clicks the
+  // option — several accessible radio/checkbox widgets treat a second click on an
+  // already-selected option as a toggle-OFF, so replay would select it and then immediately
+  // deselect it, submitting nothing.
+  clean = clean.filter((s, i) => {
+    if (s.type !== 'click') return true;
+    const next = clean[i + 1];
+    return !(next && next.type === 'choice' && next.selectedLabel === s.label);
+  });
+
+  // Step 7: An 'autocomplete' step (typeahead suggestion pick) covers the SAME field the generic
+  // fill-snapshot mechanism also watches (role="combobox" stays in the fill selector so a plain
+  // typed-and-blurred combobox with no suggestion click still gets captured) — where an
+  // autocomplete step exists for a selector+matchIndex, its re-type-and-pick-live-suggestion
+  // replay supersedes a plain fill, so drop the redundant fill to avoid double-typing the field.
+  const autoKeys = new Set(clean.filter(s => s.type === 'autocomplete').map(s => s.selector + '|' + (s.matchIndex || 0)));
+  clean = clean.filter(s => !(s.type === 'fill' && autoKeys.has(s.selector + '|' + (s.matchIndex || 0))));
+
   return clean;
 }
 
@@ -979,14 +1137,14 @@ app.post('/api/recording/import', requireAuth, (req, res) => {
   const clean = cleanRecordedSteps(steps);
   db.prepare(`INSERT INTO pending_recordings (user_id, steps, cookies, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
               ON CONFLICT(user_id) DO UPDATE SET steps=excluded.steps, cookies=excluded.cookies, created_at=CURRENT_TIMESTAMP`)
-    .run(req.user.id, JSON.stringify(clean), JSON.stringify(cookies));
+    .run(req.user.id, JSON.stringify(clean), encryptCookies(cookies));
   logUsage(req.user.id, 'record');
   res.json({ success: true, stepCount: clean.length });
 });
 
 app.get('/api/recording/pending', requireAuth, (req, res) => {
   const row = db.prepare('SELECT steps, cookies, created_at FROM pending_recordings WHERE user_id=?').get(req.user.id);
-  res.json(row ? { steps: JSON.parse(row.steps), cookies: JSON.parse(row.cookies || '[]'), created_at: row.created_at } : { steps: null });
+  res.json(row ? { steps: JSON.parse(row.steps), cookies: decryptCookiesField(row.cookies), created_at: row.created_at } : { steps: null });
 });
 
 app.delete('/api/recording/pending', requireAuth, (req, res) => {
@@ -1007,12 +1165,16 @@ function scrubCredentialSteps(steps) {
       : s
   );
 }
-const parseWf = (w) => w ? ({
-  ...w,
-  steps:     scrubCredentialSteps(JSON.parse(w.steps || '[]')),
-  variables: JSON.parse(w.variables || '[]'),
-  constants: JSON.parse(w.constants || '{}'),
-}) : null;
+const parseWf = (w) => {
+  if (!w) return null;
+  const { session_cookies, ...rest } = w; // never sent to any client — server-replay-only, and encrypted at rest regardless
+  return {
+    ...rest,
+    steps:     scrubCredentialSteps(JSON.parse(w.steps || '[]')),
+    variables: JSON.parse(w.variables || '[]'),
+    constants: JSON.parse(w.constants || '{}'),
+  };
+};
 
 app.get('/api/workflows', requireAuth, (req, res) => {
   res.json(db.prepare('SELECT * FROM workflows WHERE user_id=? ORDER BY created_at DESC').all(req.user.id).map(parseWf));
@@ -1024,7 +1186,7 @@ app.post('/api/workflows', requireAuth, (req, res) => {
   const cleanSteps = scrubCredentialSteps(steps);
   const id = uuidv4();
   db.prepare('INSERT INTO workflows (id,user_id,name,description,url,steps,variables,constants,session_cookies,auth_mode,login_domain) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
-    .run(id, req.user.id, name, description || '', url || '', JSON.stringify(cleanSteps), JSON.stringify(variables || []), JSON.stringify(constants || {}), JSON.stringify(cookies || []), authMode === 'per_user' ? 'per_user' : 'shared', loginDomain || '');
+    .run(id, req.user.id, name, description || '', url || '', JSON.stringify(cleanSteps), JSON.stringify(variables || []), JSON.stringify(constants || {}), encryptCookies(cookies), authMode === 'per_user' ? 'per_user' : 'shared', loginDomain || '');
   res.json({ success: true, workflow: parseWf(db.prepare('SELECT * FROM workflows WHERE id=?').get(id)) });
 });
 
@@ -1040,9 +1202,67 @@ app.get('/api/workflows/:id', requireAuth, (req, res) => {
 app.put('/api/workflows/:id', requireAuth, (req, res) => {
   const w = db.prepare('SELECT * FROM workflows WHERE id=? AND user_id=?').get(req.params.id, req.user.id);
   if (!w) return res.status(404).json({ error: 'Not found.' });
-  const { name, description, is_public, price, price_description, variables, constants } = req.body;
-  db.prepare('UPDATE workflows SET name=?,description=?,is_public=?,price=?,price_description=?,variables=?,constants=? WHERE id=?')
-    .run(name || w.name, description ?? w.description, is_public ? 1 : 0, price ?? 0, price_description ?? '', JSON.stringify(variables || []), JSON.stringify(constants || {}), w.id);
+  const { name, description, is_public, price, price_description, variables, constants, renameVariables, updateConstants } = req.body;
+
+  // Only touch variables/constants/steps if the request actually provided something for them —
+  // this endpoint is also used for simple metadata edits (name, price, publish toggle) that don't
+  // send these fields at all, and treating "not sent" as "clear it" would silently wipe them out.
+  const oldVariables = JSON.parse(w.variables || '[]');
+  let newVariables = variables !== undefined ? variables : oldVariables;
+  let newConstants  = constants !== undefined ? constants : JSON.parse(w.constants || '{}');
+  let newSteps      = JSON.parse(w.steps || '[]');
+
+  if (Array.isArray(renameVariables)) {
+    // Positional, not name-keyed — recordings can produce duplicate variable names (e.g. two
+    // fields both literally "input"), which name-based matching couldn't tell apart. Regular
+    // field variables and action-gated button variables are appended to the variables array in
+    // two separate passes when a workflow is first saved (see saveWorkflow in index.html), so we
+    // replay that same two-pool order here to match each array entry back to its recorded step.
+    const fieldStepIdx  = newSteps.map((s, i) => i).filter(i => newSteps[i].isVariable && newSteps[i].variableName !== undefined && !newSteps[i].isOptionalAction);
+    const actionStepIdx = newSteps.map((s, i) => i).filter(i => newSteps[i].isOptionalAction && newSteps[i].actionName !== undefined);
+    let fieldPtr = 0, actionPtr = 0;
+    newVariables = oldVariables.map(v => ({ ...v }));
+    oldVariables.forEach((v, i) => {
+      const isAction = v.type === 'action';
+      const stepIdx = isAction ? actionStepIdx[actionPtr++] : fieldStepIdx[fieldPtr++];
+      const newName = renameVariables[i];
+      if (!newName || newName === v.name) return;
+      if (stepIdx !== undefined) {
+        newSteps[stepIdx] = isAction
+          ? { ...newSteps[stepIdx], actionName: newName }
+          : { ...newSteps[stepIdx], variableName: newName };
+      }
+      newVariables[i] = { ...newVariables[i], name: newName, label: newName };
+    });
+  }
+
+  if (updateConstants && Array.isArray(updateConstants.labels)) {
+    // Same positional matching as variable renames, but what actually matters for a constant is
+    // its VALUE — replay for a constant field just reuses step.value directly (the "constants"
+    // object itself isn't consulted for fill replay), so fixing the label alone wouldn't change
+    // behavior. This updates both: the label for the user's own reference, and step.value for
+    // the field it's genuinely typed into. Only plain 'fill' steps are value-editable this way;
+    // a choice/slider/toggle marked constant keeps its recorded selection, only its label renames.
+    const { labels, values } = updateConstants;
+    const oldConstEntries = Object.entries(JSON.parse(w.constants || '{}'));
+    const constStepIdx = newSteps.map((s, i) => i).filter(i =>
+      ['fill', 'choice', 'slider', 'toggle', 'autocomplete', 'date'].includes(newSteps[i].type) && newSteps[i].isVariable === false
+    );
+    const rebuilt = {};
+    oldConstEntries.forEach(([oldKey, oldVal], i) => {
+      const newLabel = labels[i] || oldKey;
+      const newValue = values[i] !== undefined ? values[i] : oldVal;
+      rebuilt[newLabel] = newValue;
+      const stepIdx = constStepIdx[i];
+      if (stepIdx !== undefined && ['fill', 'autocomplete', 'date'].includes(newSteps[stepIdx].type)) {
+        newSteps[stepIdx] = { ...newSteps[stepIdx], value: newValue };
+      }
+    });
+    newConstants = rebuilt;
+  }
+
+  db.prepare('UPDATE workflows SET name=?,description=?,is_public=?,price=?,price_description=?,variables=?,constants=?,steps=? WHERE id=?')
+    .run(name || w.name, description ?? w.description, is_public ? 1 : 0, price ?? 0, price_description ?? '', JSON.stringify(newVariables), JSON.stringify(newConstants), JSON.stringify(scrubCredentialSteps(newSteps)), w.id);
   res.json({ success: true });
 });
 
@@ -1080,7 +1300,7 @@ app.post('/api/workflows/:id/call', requireAuth, checkUsageLimit, async (req, re
   const steps      = JSON.parse(w.steps     || '[]');
   const constants   = JSON.parse(w.constants || '{}');
   const inputs      = { ...constants, ...(req.body.inputs || {}), ...(credentialInputs || {}) };
-  const savedCookies = credentialInputs ? [] : JSON.parse(w.session_cookies || '[]');
+  const savedCookies = credentialInputs ? [] : decryptCookiesField(w.session_cookies);
 
   try {
     const result = await replayWorkflow(steps, inputs, savedCookies);
@@ -1171,7 +1391,7 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
     // (e.g. ?query=ek+nojo) can be rewritten with the value the user actually asked for this run.
     const recordedVarValues = {};
     for (const s of stepsToRun) {
-      if (s.type === 'fill' && s.isVariable && s.variableName && s.value) recordedVarValues[s.variableName] = s.value;
+      if (['fill', 'autocomplete', 'date'].includes(s.type) && s.isVariable && s.variableName && s.value) recordedVarValues[s.variableName] = s.value;
     }
 
     // Set right after a click that itself caused a real navigation (e.g. clicking a search-result
@@ -1247,31 +1467,74 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
         const label = step.label || step.selector.replace(/[#.[\]"'=]/g,' ').trim().slice(0,30);
         onProgress?.(`Clicking "${label}"...`);
         await page.waitForSelector(step.selector, { timeout: 3000 }).catch(() => {});
+        const urlBeforeClick = page.url();
         // Selectors built from a shared class (common for tab/filter/accordion headers styled
         // identically) can match several elements — disambiguate by the text captured at record
         // time, falling back to the recorded matchIndex position.
         let disambiguated = false;
+        let labelMatched = false;
         try {
           const matches = await page.$$(step.selector);
           if (matches.length > 1) {
             let target = null;
             if (step.label) {
+              const norm = s => s.toLowerCase().replace(/\s+/g, ' ').trim();
+              const wantNorm = norm(step.label);
+              // Exact trim match first, then a normalised (case/whitespace-insensitive) exact
+              // match, then substring containment — "Add to Cart" should still match a button
+              // whose text came out as "🛒 Add to Cart" or with stray whitespace from markup.
               for (const m of matches) {
                 const text = await m.evaluate(e => e.textContent.trim()).catch(() => '');
-                if (text === step.label) { target = m; break; }
+                if (text === step.label) { target = m; labelMatched = true; break; }
+              }
+              if (!target) {
+                for (const m of matches) {
+                  const text = await m.evaluate(e => e.textContent.trim()).catch(() => '');
+                  const textNorm = norm(text);
+                  if (textNorm === wantNorm || (wantNorm && textNorm.includes(wantNorm))) { target = m; labelMatched = true; break; }
+                }
               }
             }
             if (!target && step.matchIndex !== undefined) target = matches[Math.min(step.matchIndex, matches.length - 1)];
             if (target) { await target.scrollIntoView().catch(() => {}); await target.click().catch(() => {}); disambiguated = true; }
           }
         } catch (_) {}
-        const urlBeforeClick = page.url();
         if (!disambiguated) await page.click(step.selector).catch(() => {});
         await Promise.race([
           page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 4000 }).catch(() => {}),
           new Promise(r => setTimeout(r, 250)),
         ]);
         skipNextNavigate = page.url() !== urlBeforeClick;
+
+        // Positional image-click fallback — ONLY for the "click into a product thumbnail" shape:
+        // a bare <img> with no meaningful recorded label (label fell back to the tag name itself,
+        // meaning the image had no alt/aria-label at record time). This must NOT fire for labeled
+        // action buttons (Add to Cart, Buy Now...) just because they didn't navigate — most of
+        // those succeed by updating the page via AJAX, never navigating at all, so "no navigation"
+        // is the expected good outcome there, not a signal that the click failed.
+        if (!skipNextNavigate && !labelMatched && step.selector === 'img' && step.label === 'img') {
+          const handle = await page.evaluateHandle(() => {
+            const imgs = Array.from(document.querySelectorAll('img[alt]')).filter(i => {
+              const alt = (i.alt || '').trim();
+              if (alt.length <= 8 || /logo/i.test(alt)) return false;
+              const link = i.closest('a[href]');
+              if (!link) return false;
+              try { const u = new URL(link.href, location.href); if (u.pathname === '/' || u.pathname === '') return false; } catch (_) { return false; }
+              return true;
+            });
+            return imgs[0] || null;
+          }).catch(() => null);
+          const el = handle?.asElement();
+          if (el) {
+            await el.scrollIntoView().catch(() => {});
+            await el.click().catch(() => {});
+            await Promise.race([
+              page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 4000 }).catch(() => {}),
+              new Promise(r => setTimeout(r, 250)),
+            ]);
+            skipNextNavigate = page.url() !== urlBeforeClick;
+          }
+        }
       } else if (step.type === 'fill') {
         let value = step.value;
         if (step.isVariable && step.variableName) {
@@ -1345,9 +1608,18 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
           for (let attempt = 0; attempt < 5 && !el; attempt++) {
             if (attempt) await new Promise(r => setTimeout(r, 800));
             const handle = await page.evaluateHandle((text) => {
-              const all = Array.from(document.querySelectorAll('li, label, [role="option"], [role="menuitem"], button, a'));
-              const target = all.find(e => e.textContent.trim() === text);
-              return target ? (target.closest('li, [role="option"], [role="menuitem"], button, a') || target) : null;
+              // ARIA radio buttons (role="radio", common for custom-styled radio groups like
+              // Google Forms) often have EMPTY textContent — their real label lives in
+              // data-value or aria-label instead, so check those too, not just visible text.
+              const ariaLabelOf = (e) => {
+                const dv = e.getAttribute?.('data-value');
+                if (dv) return dv.trim();
+                const al = e.getAttribute?.('aria-label');
+                return al ? al.split(',')[0].trim() : '';
+              };
+              const all = Array.from(document.querySelectorAll('li, label, [role="option"], [role="menuitem"], [role="radio"], button, a'));
+              const target = all.find(e => e.textContent.trim() === text || ariaLabelOf(e) === text);
+              return target ? (target.closest('li, [role="option"], [role="menuitem"], [role="radio"], button, a') || target) : null;
             }, targetLabel).catch(() => null);
             el = handle?.asElement() || null;
           }
@@ -1358,6 +1630,80 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
         } else {
           await page.waitForSelector(selector, { timeout: 3000 }).catch(() => {});
           await page.click(selector).catch(() => {});
+        }
+        await new Promise(r => setTimeout(r, 400));
+      } else if (step.type === 'date') {
+        // Calendar date-cell pick — find whatever cell currently on screen carries the target
+        // date in its aria-label, navigating forward with a best-effort "next"-labeled control if
+        // the target month isn't visible yet (a common but not universal convention — highly
+        // custom calendar widgets with no accessible markup at all can't be driven this way, the
+        // same fundamental limit as a slider with no accessible markup).
+        let target = step.value;
+        if (step.isVariable && step.variableName && inputs[step.variableName] !== undefined) {
+          target = inputs[step.variableName];
+        }
+        const dt = new Date(target);
+        if (!isNaN(dt)) {
+          const monthName = dt.toLocaleString('en-US', { month: 'long' });
+          const day = dt.getDate();
+          const year = dt.getFullYear();
+          onProgress?.(`Selecting date ${monthName} ${day}, ${year}...`);
+          const findDayEl = async () => {
+            const handle = await page.evaluateHandle((mon, d, y) => {
+              const re = new RegExp(`\\b${mon}\\s+${d}(st|nd|rd|th)?,?\\s+${y}\\b`, 'i');
+              return Array.from(document.querySelectorAll('[aria-label]')).find(el => re.test(el.getAttribute('aria-label') || '')) || null;
+            }, monthName, day, year).catch(() => null);
+            return handle?.asElement() || null;
+          };
+          let dayEl = await findDayEl();
+          for (let i = 0; i < 12 && !dayEl; i++) {
+            const advanced = await page.evaluate(() => {
+              const btn = Array.from(document.querySelectorAll('button, [role="button"]'))
+                .find(b => /next/i.test(b.getAttribute('aria-label') || '') && b.offsetHeight > 0);
+              if (btn) { btn.click(); return true; }
+              return false;
+            }).catch(() => false);
+            if (!advanced) break;
+            await new Promise(r => setTimeout(r, 350));
+            dayEl = await findDayEl();
+          }
+          if (dayEl) {
+            await dayEl.scrollIntoView().catch(() => {});
+            await dayEl.click().catch(() => {});
+          }
+        }
+        await new Promise(r => setTimeout(r, 400));
+      } else if (step.type === 'autocomplete') {
+        // ARIA combobox (typeahead) field — re-type the requested value fresh and click whatever
+        // suggestion the site's own live search returns. The option recorded at capture time was
+        // specific to the OLD typed text and generally won't exist at all if a different value is
+        // requested now, so matching against it (like a static choice) would silently fail.
+        let target = step.value;
+        if (step.isVariable && step.variableName && inputs[step.variableName] !== undefined) {
+          target = inputs[step.variableName];
+        }
+        onProgress?.(`Typing "${target}" into "${step.label || 'field'}"...`);
+        await page.waitForSelector(step.selector, { timeout: 3000 }).catch(() => {});
+        const comboEl = await pickEl(step);
+        if (comboEl) {
+          await comboEl.click({ clickCount: 3 }).catch(() => {});
+          await comboEl.type(String(target), { delay: 60 }).catch(() => {});
+          let optEl = null;
+          for (let attempt = 0; attempt < 6 && !optEl; attempt++) {
+            await new Promise(r => setTimeout(r, 500));
+            const handle = await page.evaluateHandle((wanted) => {
+              const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+              const opts = Array.from(document.querySelectorAll('[role="option"]')).filter(o => o.offsetHeight > 0);
+              if (!opts.length) return null;
+              const w = norm(wanted);
+              return opts.find(o => norm(o.textContent).includes(w)) || opts[0];
+            }, target).catch(() => null);
+            optEl = handle?.asElement() || null;
+          }
+          if (optEl) {
+            await optEl.scrollIntoView().catch(() => {});
+            await optEl.click().catch(() => {});
+          }
         }
         await new Promise(r => setTimeout(r, 400));
       } else if (step.type === 'slider') {
@@ -1402,13 +1748,37 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
           desired = /^(y|yes|true|on|1|check)/i.test(String(inputs[step.variableName]).trim());
         }
         onProgress?.(`${desired ? 'Enabling' : 'Disabling'} "${step.label || 'option'}"...`);
-        await page.waitForSelector(step.selector, { timeout: 3000 }).catch(() => {});
-        const tEl = await pickEl(step);
-        if (tEl) {
-          const cur = await tEl.evaluate(el => !!el.checked).catch(() => null);
-          if (cur !== null && cur !== desired) {
-            await tEl.scrollIntoView().catch(() => {});
-            await tEl.click().catch(() => {});
+        if (step.mode === 'text') {
+          // ARIA checkbox (role="checkbox") — no real selector was recorded, so find the
+          // element currently on screen by its label the same way choice's text-mode does, and
+          // read/toggle aria-checked instead of a native .checked property.
+          const handle = await page.evaluateHandle((text) => {
+            const ariaLabelOf = (e) => {
+              const dv = e.getAttribute?.('data-value');
+              if (dv) return dv.trim();
+              const al = e.getAttribute?.('aria-label');
+              return al ? al.split(',')[0].trim() : '';
+            };
+            const all = Array.from(document.querySelectorAll('[role="checkbox"]'));
+            return all.find(e => e.textContent.trim() === text || ariaLabelOf(e) === text) || null;
+          }, step.label).catch(() => null);
+          const el = handle?.asElement() || null;
+          if (el) {
+            const cur = await el.evaluate(e => e.getAttribute('aria-checked') === 'true').catch(() => null);
+            if (cur !== null && cur !== desired) {
+              await el.scrollIntoView().catch(() => {});
+              await el.click().catch(() => {});
+            }
+          }
+        } else {
+          await page.waitForSelector(step.selector, { timeout: 3000 }).catch(() => {});
+          const tEl = await pickEl(step);
+          if (tEl) {
+            const cur = await tEl.evaluate(el => !!el.checked).catch(() => null);
+            if (cur !== null && cur !== desired) {
+              await tEl.scrollIntoView().catch(() => {});
+              await tEl.click().catch(() => {});
+            }
           }
         }
         await new Promise(r => setTimeout(r, 400));
@@ -1523,7 +1893,7 @@ app.post('/api/workflows/:id/chat', requireAuth, async (req, res) => {
 
   const variables    = JSON.parse(w.variables     || '[]');
   const constants    = JSON.parse(w.constants     || '{}');
-  const savedCookies = credentialInputs ? [] : JSON.parse(w.session_cookies || '[]');
+  const savedCookies = credentialInputs ? [] : decryptCookiesField(w.session_cookies);
 
   // ── Step 1: Understand the request with Claude ─────────────────────────────
   let inputs = {}, understood = '';
@@ -1552,10 +1922,16 @@ User said: "${message}"
 
 Rules:
 - Include EVERY variable listed above as a key in the JSON — no exceptions
-- Use the EXACT variable name as the JSON key (copy it character for character)
+- Use the EXACT variable name as the JSON key (copy it character for character), even though the
+  user will almost never say that exact name — match by MEANING, not wording. They might use a
+  synonym, a shortened version, or just describe the field in passing (e.g. a variable named
+  "Most Useful Aspect" should be filled from something like "the labs were the best part", a
+  variable named "Instructor" should match "prof was Dr. Khan" or just "Dr. Khan"). Read the
+  whole message once, decide which part of it belongs to which variable, then assign each piece —
+  don't require the user to label their own sentence.
 - Convert relative dates to real dates (e.g. "next friday" → "2026-07-03")
 - For origin/destination: include city name as typed, e.g. "Dhaka", "Sylhet", "London"
-- If user doesn't mention a variable, keep its current/example value
+- If user doesn't mention a variable at all, keep its current/example value — never invent one
 - For "choice" variables, copy one of the listed options exactly — pick whichever best serves the user's intent (e.g. if they want "cheapest" or "lowest price", pick a low-to-high price sort option if one exists)
 - For "number" (range) variables, output a plain number within the given range
 - For "toggle" variables: "yes" or "no" based on what the user wants
