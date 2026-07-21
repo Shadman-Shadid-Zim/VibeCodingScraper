@@ -46,6 +46,21 @@
       return generateSelector(el);
     };
 
+    // Some sites reuse the exact same [name] across multiple UNRELATED radio groups (seen on
+    // ShareTrip: trip-type, fare-type, and cabin-class radios all literally named "radio-group")
+    // — a document-wide query would then merge them into one nonsensical combined option list.
+    // Real groups are always tightly nested together in practice, so the smallest ancestor that
+    // contains more than one same-name match is the true group; climbing further would only start
+    // sweeping in an unrelated group further up the tree.
+    const findGroupScope = (el, name) => {
+      let scope = el.parentElement;
+      for (let i = 0; i < 8 && scope; i++) {
+        if (scope.querySelectorAll(`input[name="${CSS.escape(name)}"]`).length > 1) return scope;
+        scope = scope.parentElement;
+      }
+      return document;
+    };
+
     const getLabel = (el) =>
       el.getAttribute('aria-label') || el.placeholder || el.name || el.id ||
       (el.textContent || '').trim().substring(0, 30) || el.tagName.toLowerCase();
@@ -108,15 +123,21 @@
       }
 
       if (optionInput && optionInput.name) {
-        const groupEls = Array.from(document.querySelectorAll(`input[name="${CSS.escape(optionInput.name)}"]`));
+        const groupScope = findGroupScope(optionInput, optionInput.name);
+        const groupEls = Array.from(groupScope.querySelectorAll(`input[name="${CSS.escape(optionInput.name)}"]`));
         if (groupEls.length > 1) {
+          // The raw [name] attribute is often generic or even reused across unrelated groups on
+          // the same page — not even guaranteed unique — so summarize the group by its own
+          // option text instead, which is always meaningfully distinct.
+          const optLabels = groupEls.map(el => getOptionLabel(el)).filter(Boolean);
+          const groupLabel = optLabels.slice(0, 3).join(' / ').slice(0, 60) || optionInput.name;
           send({
             type: 'choice',
-            groupName: optionInput.name,
+            groupName: groupLabel,
             options: groupEls.map(el => ({ selector: generateOptionSelector(el), label: getOptionLabel(el), value: el.value })),
             selectedSelector: generateOptionSelector(optionInput),
             selectedLabel: getOptionLabel(optionInput),
-            label: optionInput.name,
+            label: groupLabel,
           });
           return;
         }
@@ -202,6 +223,52 @@
         }
       }
 
+      // Numeric stepper / quantity selector (e.g. traveller-count pickers, ticket/quantity
+      // pickers) — a clicked button sitting in a strict 3-sibling row [button, number, button].
+      // No ARIA convention exists for this at all (unlike radio/checkbox/combobox/date — these
+      // +/- icon buttons carry no aria-label), but the exact 3-child shape is itself a common,
+      // reliable structural signal for quantity pickers across many frameworks/sites, and strict
+      // enough not to misfire on unrelated things like pagination bars (which have more than 3
+      // children: prev, several page numbers, next). Checked BEFORE the generic list/option
+      // detector below, which would otherwise misinterpret a stepper's whole row-list as a
+      // static multi-choice pick — recording a confusing new "choice" variable on every click
+      // instead of recognizing it as one count that goes up or down.
+      if (!optionInput) {
+        const btnEl = e.target.closest('button');
+        const sibs = btnEl && btnEl.parentElement ? Array.from(btnEl.parentElement.children) : [];
+        if (btnEl && sibs.length === 3) {
+          const idx = sibs.indexOf(btnEl);
+          const numEl = sibs[1] !== btnEl && /^\d+$/.test((sibs[1].textContent || '').trim()) ? sibs[1] : null;
+          const otherBtn = numEl && idx !== 1 ? sibs.find(s => s.tagName === 'BUTTON' && s !== btnEl) : null;
+          if (numEl && otherBtn) {
+            const before = parseInt(numEl.textContent.trim(), 10);
+            const rowEl = btnEl.closest('li, tr, [role="row"]') || btnEl.parentElement.parentElement;
+            const rowLabel = ((rowEl && rowEl.querySelector('p,span,label')) ? rowEl.querySelector('p,span,label').textContent : getLabel(btnEl)).trim().slice(0, 40);
+            const btnSel = generateSelector(btnEl), otherSel = generateSelector(otherBtn), numSel = generateSelector(numEl);
+            const btnMi = getMatchIndex(btnEl, btnSel), otherMi = getMatchIndex(otherBtn, otherSel), numMi = getMatchIndex(numEl, numSel);
+            setTimeout(() => {
+              const allNum = document.querySelectorAll(numSel);
+              const afterEl = allNum[Math.min(numMi, allNum.length - 1)];
+              const after = afterEl ? parseInt(afterEl.textContent.trim(), 10) : NaN;
+              if (!isNaN(before) && !isNaN(after) && before !== after) {
+                send({
+                  type: 'stepper',
+                  label: rowLabel || 'Count',
+                  incSelector: after > before ? btnSel : otherSel,
+                  incMatchIndex: after > before ? btnMi : otherMi,
+                  decSelector: after > before ? otherSel : btnSel,
+                  decMatchIndex: after > before ? otherMi : btnMi,
+                  countSelector: numSel,
+                  countMatchIndex: numMi,
+                  value: after,
+                });
+              }
+            }, 250);
+            return;
+          }
+        }
+      }
+
       const optionEl = e.target.closest('li, [role="option"], [role="menuitem"]');
       if (optionEl && !optionInput) {
         const container = optionEl.parentElement;
@@ -244,8 +311,19 @@
         return;
       }
 
-      const sel = generateSelector(e.target);
-      send({ type: 'click', selector: sel, matchIndex: getMatchIndex(e.target, sel), tag: e.target.tagName.toLowerCase(), label: getLabel(e.target) });
+      // Clicks often land on a tiny icon inside a real control — an <svg>/<path>/<use>/<i> that
+      // has no stable identity of its own (selector "path", matchIndex 108...), so it can never be
+      // re-found at replay and the click misses (this is exactly what broke ShareTrip's Search
+      // button, making the whole run fall back to the recorded default URL). Retarget to the
+      // nearest genuinely clickable ancestor (button/link/[role=button]/submit) so we record a
+      // selector that actually points at the control the user meant to press.
+      let clickTarget = e.target;
+      if (/^(svg|path|use|i|img|span)$/i.test(clickTarget.tagName)) {
+        const real = clickTarget.closest('button, a, [role="button"], [type="submit"], input[type="submit"]');
+        if (real) clickTarget = real;
+      }
+      const sel = generateSelector(clickTarget);
+      send({ type: 'click', selector: sel, matchIndex: getMatchIndex(clickTarget, sel), tag: clickTarget.tagName.toLowerCase(), label: getLabel(clickTarget) });
       setTimeout(snapshotAll, 600);
     }, true);
 
@@ -309,16 +387,29 @@
     if (!armed) { armed = true; attach(); }
   };
 
+  const disarm = () => { active = false; removeIndicator(); };
+
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg && msg.kind === 'activate') { arm(); sendResponse({ ok: true }); }
-    if (msg && msg.kind === 'deactivate') { active = false; removeIndicator(); sendResponse({ ok: true }); }
+    if (msg && msg.kind === 'deactivate') { disarm(); sendResponse({ ok: true }); }
   });
 
-  // On page load, ask whether this tab is mid-recording (survives navigations)
-  try {
-    chrome.runtime.sendMessage({ kind: 'getState' }, (resp) => {
-      if (chrome.runtime.lastError) return;
-      if (resp && resp.active) arm();
-    });
-  } catch (_) {}
+  // Stay continuously in sync with the background recording state instead of relying on a single
+  // check at page load. That one-shot check was fragile: on a heavy SPA (or right after an initial
+  // redirect) it could race the moment recording is turned on and miss it entirely, leaving the
+  // page un-armed so NOTHING but navigation events got captured for the whole session. Polling the
+  // background state every couple of seconds is cheap (a tiny message) and guarantees the content
+  // script arms within ~2s no matter which activate/getState message was missed — recording is an
+  // interactive, seconds-between-clicks activity, so this sync speed is more than fast enough.
+  const syncState = () => {
+    try {
+      chrome.runtime.sendMessage({ kind: 'getState' }, (resp) => {
+        if (chrome.runtime.lastError) return;
+        if (resp && resp.active) { if (!active) arm(); }
+        else if (active) disarm();
+      });
+    } catch (_) {}
+  };
+  syncState();
+  setInterval(syncState, 2000);
 })();

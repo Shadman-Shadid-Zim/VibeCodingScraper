@@ -585,6 +585,21 @@ app.post('/api/recording/start', requireAuth, checkUsageLimit, async (req, res) 
             return generateSelector(el);
           };
 
+          // Some sites reuse the exact same [name] across multiple UNRELATED radio groups (seen on
+          // ShareTrip: trip-type, fare-type, and cabin-class radios all literally named
+          // "radio-group") — a document-wide query would then merge them into one nonsensical
+          // combined option list. Real groups are always tightly nested together in practice, so
+          // the smallest ancestor that contains more than one same-name match is the true group;
+          // climbing further would only start sweeping in an unrelated group further up the tree.
+          const findGroupScope = (el, name) => {
+            let scope = el.parentElement;
+            for (let i = 0; i < 8 && scope; i++) {
+              if (scope.querySelectorAll(`input[name="${CSS.escape(name)}"]`).length > 1) return scope;
+              scope = scope.parentElement;
+            }
+            return document;
+          };
+
           const getLabel = (el) =>
             el.getAttribute('aria-label') || el.placeholder || el.name || el.id ||
             (el.textContent || '').trim().substring(0, 30) || el.tagName.toLowerCase();
@@ -668,15 +683,23 @@ app.post('/api/recording/start', requireAuth, checkUsageLimit, async (req, res) 
               if (wrapLabel) optionInput = wrapLabel.querySelector('input[type="radio"], input[type="checkbox"]');
             }
             if (optionInput && optionInput.name) {
-              const groupEls = Array.from(document.querySelectorAll(`input[name="${CSS.escape(optionInput.name)}"]`));
+              const groupScope = findGroupScope(optionInput, optionInput.name);
+              const groupEls = Array.from(groupScope.querySelectorAll(`input[name="${CSS.escape(optionInput.name)}"]`));
               if (groupEls.length > 1) {
+                // The raw [name] attribute is often generic or even reused across unrelated
+                // groups on the same page (e.g. ShareTrip literally names trip-type, fare-type,
+                // and cabin-class radios all "radio-group") — useless, and not even guaranteed
+                // unique, as a human/AI-facing label. The option text itself is always
+                // meaningfully distinct, so summarize the group by its own options instead.
+                const optLabels = groupEls.map(el => getOptionLabel(el)).filter(Boolean);
+                const groupLabel = optLabels.slice(0, 3).join(' / ').slice(0, 60) || optionInput.name;
                 window.__recordAction({
                   type: 'choice',
-                  groupName: optionInput.name,
+                  groupName: groupLabel,
                   options: groupEls.map(el => ({ selector: generateOptionSelector(el), label: getOptionLabel(el), value: el.value })),
                   selectedSelector: generateOptionSelector(optionInput),
                   selectedLabel: getOptionLabel(optionInput),
-                  label: optionInput.name,
+                  label: groupLabel,
                 });
                 updateCount();
                 return;
@@ -779,6 +802,54 @@ app.post('/api/recording/start', requireAuth, checkUsageLimit, async (req, res) 
               }
             }
 
+            // Numeric stepper / quantity selector (e.g. traveller-count pickers, ticket/quantity
+            // pickers) — a clicked button sitting in a strict 3-sibling row [button, number,
+            // button]. No ARIA convention exists for this at all (unlike radio/checkbox/combobox/
+            // date — these +/- icon buttons carry no aria-label), but the exact 3-child shape is
+            // itself a common, reliable structural signal for quantity pickers across many
+            // frameworks/sites, and strict enough not to misfire on unrelated things like
+            // pagination bars (which have more than 3 children: prev, several page numbers, next).
+            // Checked BEFORE the generic list/option detector below, which would otherwise
+            // misinterpret a stepper's whole row-list as a static multi-choice pick — recording a
+            // confusing new "choice" variable on every click instead of recognizing it as one
+            // count that goes up or down.
+            if (!optionInput) {
+              const btnEl = e.target.closest('button');
+              const sibs = btnEl && btnEl.parentElement ? Array.from(btnEl.parentElement.children) : [];
+              if (btnEl && sibs.length === 3) {
+                const idx = sibs.indexOf(btnEl);
+                const numEl = sibs[1] !== btnEl && /^\d+$/.test((sibs[1].textContent || '').trim()) ? sibs[1] : null;
+                const otherBtn = numEl && idx !== 1 ? sibs.find(s => s.tagName === 'BUTTON' && s !== btnEl) : null;
+                if (numEl && otherBtn) {
+                  const before = parseInt(numEl.textContent.trim(), 10);
+                  const rowEl = btnEl.closest('li, tr, [role="row"]') || btnEl.parentElement.parentElement;
+                  const rowLabel = ((rowEl && rowEl.querySelector('p,span,label')) ? rowEl.querySelector('p,span,label').textContent : getLabel(btnEl)).trim().slice(0, 40);
+                  const btnSel = generateSelector(btnEl), otherSel = generateSelector(otherBtn), numSel = generateSelector(numEl);
+                  const btnMi = getMatchIndex(btnEl, btnSel), otherMi = getMatchIndex(otherBtn, otherSel), numMi = getMatchIndex(numEl, numSel);
+                  setTimeout(() => {
+                    const allNum = document.querySelectorAll(numSel);
+                    const afterEl = allNum[Math.min(numMi, allNum.length - 1)];
+                    const after = afterEl ? parseInt(afterEl.textContent.trim(), 10) : NaN;
+                    if (!isNaN(before) && !isNaN(after) && before !== after) {
+                      window.__recordAction({
+                        type: 'stepper',
+                        label: rowLabel || 'Count',
+                        incSelector: after > before ? btnSel : otherSel,
+                        incMatchIndex: after > before ? btnMi : otherMi,
+                        decSelector: after > before ? otherSel : btnSel,
+                        decMatchIndex: after > before ? otherMi : btnMi,
+                        countSelector: numSel,
+                        countMatchIndex: numMi,
+                        value: after,
+                      });
+                      updateCount();
+                    }
+                  }, 250);
+                  return;
+                }
+              }
+            }
+
             const optionEl = e.target.closest('li, [role="option"], [role="menuitem"]');
             if (optionEl && !optionInput) {
               const container = optionEl.parentElement;
@@ -822,8 +893,18 @@ app.post('/api/recording/start', requireAuth, checkUsageLimit, async (req, res) 
               return;
             }
 
-            const sel = generateSelector(e.target);
-            window.__recordAction({ type: 'click', selector: sel, matchIndex: getMatchIndex(e.target, sel), tag: e.target.tagName.toLowerCase(), label: getLabel(e.target) });
+            // Clicks often land on a tiny icon inside a real control — an <svg>/<path>/<use>/<i>
+            // with no stable identity of its own (selector "path", matchIndex 108...), un-refindable
+            // at replay so the click misses (this is what broke ShareTrip's Search button, making the
+            // whole run fall back to the recorded default URL). Retarget to the nearest genuinely
+            // clickable ancestor so the recorded selector points at the control the user meant.
+            let clickTarget = e.target;
+            if (/^(svg|path|use|i|img|span)$/i.test(clickTarget.tagName)) {
+              const real = clickTarget.closest('button, a, [role="button"], [type="submit"], input[type="submit"]');
+              if (real) clickTarget = real;
+            }
+            const sel = generateSelector(clickTarget);
+            window.__recordAction({ type: 'click', selector: sel, matchIndex: getMatchIndex(clickTarget, sel), tag: clickTarget.tagName.toLowerCase(), label: getLabel(clickTarget) });
             updateCount();
             // Snapshot AFTER click so autocomplete fills and React state updates are captured
             setTimeout(snapshotAll, 600);
@@ -1056,6 +1137,18 @@ function cleanRecordedSteps(steps) {
     (s.type !== 'fill' && s.type !== 'slider') || lastPos.get(s.type + '|' + s.selector + '|' + (s.matchIndex || 0)) === i
   );
 
+  // Step 4b: Same idea for stepper clicks (e.g. clicking "+" three times on a passenger count) —
+  // each click records its own running total, but only the FINAL one reflects what was actually
+  // wanted; keep just the last stepper step per row (identified by its count-display element,
+  // since stepper steps have no single [selector] the way fill/slider do).
+  const lastStepperPos = new Map();
+  clean.forEach((s, i) => {
+    if (s.type === 'stepper') lastStepperPos.set(s.countSelector + '|' + (s.countMatchIndex || 0), i);
+  });
+  clean = clean.filter((s, i) =>
+    s.type !== 'stepper' || lastStepperPos.get(s.countSelector + '|' + (s.countMatchIndex || 0)) === i
+  );
+
   // Step 5: Drop repeat navigates to a page path already visited (query string ignored). Many
   // sites (Daraz among them) fire a second, harmless "soft" navigate shortly after a product page
   // loads — tracking params or slug normalization, not a real page change. If kept, it survives as
@@ -1094,6 +1187,27 @@ function cleanRecordedSteps(steps) {
   // replay supersedes a plain fill, so drop the redundant fill to avoid double-typing the field.
   const autoKeys = new Set(clean.filter(s => s.type === 'autocomplete').map(s => s.selector + '|' + (s.matchIndex || 0)));
   clean = clean.filter(s => !(s.type === 'fill' && autoKeys.has(s.selector + '|' + (s.matchIndex || 0))));
+
+  // Step 8: Collapse a run of consecutive 'date' steps into just the last one — a user commonly
+  // clicks around a calendar (browsing months, correcting a misclick) before landing on the date
+  // they actually want, and only the final pick reflects that. Non-consecutive date steps
+  // (separated by some other action — e.g. genuinely picking both a departure AND a return date)
+  // are left alone since those are two different fields.
+  clean = clean.filter((s, i) => {
+    if (s.type !== 'date') return true;
+    const next = clean[i + 1];
+    return !(next && next.type === 'date');
+  });
+
+  // Step 9: Drop a 'choice' step immediately followed by another 'choice' selecting the IDENTICAL
+  // option in the SAME group. Some sites' widgets fire the underlying selection handler twice for
+  // one physical click (a re-render plus a confirm event), recording the same pick twice in a row
+  // — harmless to replay once, but confusing as two separate near-duplicate variables.
+  clean = clean.filter((s, i) => {
+    if (s.type !== 'choice') return true;
+    const next = clean[i + 1];
+    return !(next && next.type === 'choice' && next.label === s.label && next.selectedLabel === s.selectedLabel);
+  });
 
   return clean;
 }
@@ -1246,7 +1360,7 @@ app.put('/api/workflows/:id', requireAuth, (req, res) => {
     const { labels, values } = updateConstants;
     const oldConstEntries = Object.entries(JSON.parse(w.constants || '{}'));
     const constStepIdx = newSteps.map((s, i) => i).filter(i =>
-      ['fill', 'choice', 'slider', 'toggle', 'autocomplete', 'date'].includes(newSteps[i].type) && newSteps[i].isVariable === false
+      ['fill', 'choice', 'slider', 'toggle', 'autocomplete', 'date', 'stepper'].includes(newSteps[i].type) && newSteps[i].isVariable === false
     );
     const rebuilt = {};
     oldConstEntries.forEach(([oldKey, oldVal], i) => {
@@ -1254,7 +1368,7 @@ app.put('/api/workflows/:id', requireAuth, (req, res) => {
       const newValue = values[i] !== undefined ? values[i] : oldVal;
       rebuilt[newLabel] = newValue;
       const stepIdx = constStepIdx[i];
-      if (stepIdx !== undefined && ['fill', 'autocomplete', 'date'].includes(newSteps[stepIdx].type)) {
+      if (stepIdx !== undefined && ['fill', 'autocomplete', 'date', 'stepper'].includes(newSteps[stepIdx].type)) {
         newSteps[stepIdx] = { ...newSteps[stepIdx], value: newValue };
       }
     });
@@ -1391,8 +1505,16 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
     // (e.g. ?query=ek+nojo) can be rewritten with the value the user actually asked for this run.
     const recordedVarValues = {};
     for (const s of stepsToRun) {
-      if (['fill', 'autocomplete', 'date'].includes(s.type) && s.isVariable && s.variableName && s.value) recordedVarValues[s.variableName] = s.value;
+      if (['fill', 'autocomplete', 'date', 'stepper'].includes(s.type) && s.isVariable && s.variableName && s.value !== undefined) recordedVarValues[s.variableName] = s.value;
     }
+
+    // Visible replay confidence: a step whose target can't be found on THIS run (site layout
+    // shifted, a requested value has no matching option, etc.) used to fail silently — the run
+    // would just quietly skip it and report success anyway, leaving no way for anyone (including
+    // the end user, who can't inspect server logs) to know a field didn't actually get set. Every
+    // step handler below now records a warning here instead when its target can't be resolved, and
+    // the chat response surfaces them plainly rather than pretending everything worked.
+    const warnings = [];
 
     // Set right after a click that itself caused a real navigation (e.g. clicking a search-result
     // card, or a search button that submits a form). The NEXT recorded step is very often the
@@ -1506,6 +1628,45 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
         ]);
         skipNextNavigate = page.url() !== urlBeforeClick;
 
+        // Submit/search-button rescue: a click recorded against a bare icon leaf (selector is just
+        // "path"/"svg"/"use"/"i" — an icon INSIDE a real button, with no stable identity of its own)
+        // can't be re-found and silently misses. When that misses on what is really the form's
+        // submit control, the run falls back to the recorded navigate URL, which still encodes the
+        // ORIGINAL recorded search — so every field we just carefully filled gets thrown away (this
+        // is exactly why ShareTrip reverted to New York→Dubai). If such an icon click produced no
+        // navigation, find and click the real search/submit button so the SITE rebuilds the URL
+        // from the fields we set. (Recordings made after the record-side icon→button fix won't hit
+        // this, but existing ones still need it.)
+        if (!skipNextNavigate && /^(path|svg|use|i)$/i.test(step.selector)) {
+          const before = page.url();
+          const btn = await page.evaluateHandle(() => {
+            const vis = e => e && e.offsetHeight > 0 && e.offsetWidth > 0;
+            // Prefer an explicit submit control first.
+            let el = document.querySelector('button[type="submit"], input[type="submit"], form button:last-of-type');
+            if (vis(el)) return el;
+            // Then a BUTTON (not <a> — promo links falsely match "search") whose OWN short label or
+            // aria-label reads like a submit action. Keep the text short so a long promotional
+            // string that merely contains the word doesn't match.
+            const re = /^(search|find|submit|go|apply|search flights?|show results?|explore)\b/i;
+            const btns = Array.from(document.querySelectorAll('button, [role="button"]')).filter(vis);
+            return btns.find(e => {
+              const t = (e.textContent || '').trim();
+              const a = (e.getAttribute('aria-label') || '').trim();
+              return (t.length <= 20 && re.test(t)) || re.test(a);
+            }) || null;
+          }).catch(() => null);
+          const el = btn?.asElement() || null;
+          if (el) {
+            await el.scrollIntoView().catch(() => {});
+            await el.click().catch(() => {});
+            await Promise.race([
+              page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 5000 }).catch(() => {}),
+              new Promise(r => setTimeout(r, 400)),
+            ]);
+            skipNextNavigate = page.url() !== before;
+          }
+        }
+
         // Positional image-click fallback — ONLY for the "click into a product thumbnail" shape:
         // a bare <img> with no meaningful recorded label (label fell back to the tag name itself,
         // meaning the image had no alt/aria-label at record time). This must NOT fire for labeled
@@ -1567,20 +1728,41 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
             el.dispatchEvent(new Event('input', { bubbles: true }));
           }).catch(() => {});
           await fillEl.type(String(value), { delay: 50 }).catch(() => {});
+        } else {
+          warnings.push(`Couldn't find the "${label}" field on this run — it may not have been typed in.`);
         }
         await new Promise(r => setTimeout(r, 700));
-        // If this was an autocomplete field, check if a dropdown appeared and pick the first option
+        // If this was a search/autocomplete field, a suggestion dropdown likely appeared — on many
+        // sites (airport pickers, address fields) the typed text ALONE doesn't register a real
+        // value; you must pick a suggestion. Prefer clicking the option whose text best matches
+        // what was typed (falling back to the first one), which is far more reliable than
+        // ArrowDown+Enter keyboard nav that many custom dropdowns ignore.
         if (step.autocomplete) {
-          const hasDropdown = await page.evaluate(() => {
-            const selectors = ['[role="listbox"]','[role="option"]','.pac-container .pac-item','[data-testid*="option"]','[aria-autocomplete] + *','ul[role="listbox"]'];
-            return selectors.some(s => { const el = document.querySelector(s); return el && el.offsetHeight > 0; });
-          }).catch(() => false);
-          if (hasDropdown) {
+          let picked = false;
+          for (let attempt = 0; attempt < 4 && !picked; attempt++) {
+            await new Promise(r => setTimeout(r, attempt ? 400 : 0));
+            const handle = await page.evaluateHandle((wanted) => {
+              const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+              const opts = Array.from(document.querySelectorAll('[role="option"], [role="listbox"] li, .pac-container .pac-item'))
+                .filter(o => o.offsetHeight > 0);
+              if (!opts.length) return null;
+              const w = norm(wanted);
+              return opts.find(o => w && norm(o.textContent).includes(w)) || opts[0];
+            }, String(value)).catch(() => null);
+            const optEl = handle?.asElement() || null;
+            if (optEl) {
+              await optEl.scrollIntoView().catch(() => {});
+              await optEl.click().catch(() => {});
+              picked = true;
+            }
+          }
+          // Keyboard fallback if no clickable option element was found at all
+          if (!picked) {
             await page.keyboard.press('ArrowDown').catch(() => {});
             await new Promise(r => setTimeout(r, 250));
             await page.keyboard.press('Enter').catch(() => {});
-            await new Promise(r => setTimeout(r, 500));
           }
+          await new Promise(r => setTimeout(r, 500));
         }
       } else if (step.type === 'choice') {
         // Pick whichever recorded option's label best matches the requested value —
@@ -1596,6 +1778,7 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
             if (score > bestScore) { bestScore = score; best = opt; }
           }
           if (best) { selector = best.selector; targetLabel = best.label; }
+          else warnings.push(`Requested "${inputs[step.variableName]}" for "${step.label || 'a choice field'}" didn't match any recorded option (${(step.options||[]).map(o=>o.label).join(', ')}) — kept the originally recorded selection instead.`);
         }
         onProgress?.(`Selecting "${targetLabel}"...`);
         if (step.mode === 'text') {
@@ -1626,10 +1809,42 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
           if (el) {
             await el.scrollIntoView().catch(() => {});
             await el.click().catch(() => {});
+          } else {
+            warnings.push(`Couldn't find the "${targetLabel}" option on screen for "${step.label || 'a choice field'}" — it may not have been selected.`);
           }
         } else {
           await page.waitForSelector(selector, { timeout: 3000 }).catch(() => {});
-          await page.click(selector).catch(() => {});
+          let clicked = await page.click(selector).then(() => true).catch(() => false);
+          if (!clicked) {
+            // The native radio/checkbox <input> is very often visually hidden behind a styled
+            // wrapper (MUI, Ant, Bootstrap all do this) — a direct page.click on the zero-size
+            // input fails. Click the element that actually toggles it instead: its wrapping
+            // <label>, or the on-screen element whose visible text matches the option label. Also
+            // retries a few times since the panel this option lives in may have been opened by the
+            // immediately preceding click step and may still be animating in.
+            for (let attempt = 0; attempt < 4 && !clicked; attempt++) {
+              if (attempt) await new Promise(r => setTimeout(r, 500));
+              const handle = await page.evaluateHandle((sel, text) => {
+                const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+                const input = document.querySelector(sel);
+                if (input) {
+                  const lab = input.closest('label') ||
+                    (input.id && document.querySelector(`label[for="${CSS.escape(input.id)}"]`));
+                  if (lab) return lab;
+                }
+                // Fall back to any visible clickable element showing the option's text
+                const wl = norm(text);
+                const cands = Array.from(document.querySelectorAll('label, li, [role="radio"], [role="option"], button, span, div'));
+                return cands.find(e => e.offsetHeight > 0 && norm(e.textContent) === wl) || input || null;
+              }, selector, targetLabel).catch(() => null);
+              const el = handle?.asElement() || null;
+              if (el) {
+                await el.scrollIntoView().catch(() => {});
+                clicked = await el.click().then(() => true).catch(() => false);
+              }
+            }
+          }
+          if (!clicked) warnings.push(`Couldn't find the "${targetLabel}" option on screen for "${step.label || 'a choice field'}" — it may not have been selected.`);
         }
         await new Promise(r => setTimeout(r, 400));
       } else if (step.type === 'date') {
@@ -1670,7 +1885,11 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
           if (dayEl) {
             await dayEl.scrollIntoView().catch(() => {});
             await dayEl.click().catch(() => {});
+          } else {
+            warnings.push(`Couldn't find ${monthName} ${day}, ${year} on the "${step.label || 'date'}" calendar — it may not have been selected.`);
           }
+        } else {
+          warnings.push(`Couldn't understand "${target}" as a date for "${step.label || 'date'}" — it may not have been selected.`);
         }
         await new Promise(r => setTimeout(r, 400));
       } else if (step.type === 'autocomplete') {
@@ -1703,7 +1922,11 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
           if (optEl) {
             await optEl.scrollIntoView().catch(() => {});
             await optEl.click().catch(() => {});
+          } else {
+            warnings.push(`Typed "${target}" into "${step.label || 'field'}" but no suggestion appeared to pick — it may not have been set.`);
           }
+        } else {
+          warnings.push(`Couldn't find the "${step.label || 'field'}" autocomplete field on this run.`);
         }
         await new Promise(r => setTimeout(r, 400));
       } else if (step.type === 'slider') {
@@ -1737,8 +1960,12 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
               await page.mouse.move(box.x + box.width * ratio, y, { steps: 15 });
               await page.mouse.up();
               await new Promise(r => setTimeout(r, 300));
+            } else {
+              warnings.push(`Couldn't measure the "${step.label || 'range'}" slider on this run — it may not have moved.`);
             }
           }
+        } else {
+          warnings.push(`Couldn't find the "${step.label || 'range'}" slider on this run.`);
         }
       } else if (step.type === 'toggle') {
         // On/off checkbox: honor the requested state (variable) or the recorded one,
@@ -1769,6 +1996,8 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
               await el.scrollIntoView().catch(() => {});
               await el.click().catch(() => {});
             }
+          } else {
+            warnings.push(`Couldn't find the "${step.label || 'option'}" checkbox on this run — it may not have been set.`);
           }
         } else {
           await page.waitForSelector(step.selector, { timeout: 3000 }).catch(() => {});
@@ -1779,9 +2008,79 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
               await tEl.scrollIntoView().catch(() => {});
               await tEl.click().catch(() => {});
             }
+          } else {
+            warnings.push(`Couldn't find the "${step.label || 'option'}" checkbox on this run — it may not have been set.`);
           }
         }
         await new Promise(r => setTimeout(r, 400));
+      } else if (step.type === 'stepper') {
+        // Numeric stepper / quantity selector (e.g. passenger counts, ticket quantities) — no
+        // fixed set of "options" exists here, just a running count and two buttons that move it
+        // up or down. Reads the CURRENT live count (not the recorded one — it may already differ)
+        // and clicks the recorded +/- button toward the requested target.
+        let target = parseInt(step.value, 10);
+        if (step.isVariable && step.variableName && inputs[step.variableName] !== undefined) {
+          const parsed = parseInt(String(inputs[step.variableName]).replace(/[^0-9]/g, ''), 10);
+          if (!isNaN(parsed)) target = parsed;
+        }
+        onProgress?.(`Setting "${step.label || 'count'}" to ${target}...`);
+        // Anchor everything to the visible ROW LABEL ("Adults", "Children", ...) rather than the
+        // generic global class selectors captured at record time (e.g. "p.MuiTypography-root",
+        // which matches hundreds of elements — its positional index simply does not survive from
+        // record to replay, which is what produced the "ended at NaN" failures). The label text is
+        // a stable, human-meaningful anchor: find the element showing it, walk up to the row that
+        // ALSO contains a bare number and 2+ buttons, then read the number and step the correct
+        // button. dec = a button positioned before the number, inc = a button after it.
+        const stepOnce = async (dir) => {
+          return await page.evaluate((labelText, direction) => {
+            const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            const wantL = norm(labelText);
+            const labelEl = Array.from(document.querySelectorAll('p,span,label,div'))
+              .find(e => e.children.length === 0 && e.offsetHeight > 0 && norm(e.textContent) === wantL);
+            if (!labelEl) return { found: false };
+            // climb to the smallest ancestor row that holds a numeric text node and 2+ buttons
+            let row = labelEl;
+            for (let i = 0; i < 6 && row; i++) {
+              const btns = row.querySelectorAll('button');
+              const numEl = Array.from(row.querySelectorAll('p,span,div'))
+                .find(e => e.children.length === 0 && /^\d+$/.test((e.textContent || '').trim()));
+              if (btns.length >= 2 && numEl) {
+                const cur = parseInt(numEl.textContent.trim(), 10);
+                if (direction === 0) return { found: true, current: cur };
+                // order buttons by document position; those before the number decrement, after increment
+                const numRect = numEl.getBoundingClientRect();
+                const ordered = Array.from(btns).map(b => ({ b, x: b.getBoundingClientRect().left }))
+                  .sort((a, z) => a.x - z.x).map(o => o.b);
+                const before = ordered.filter(b => b.getBoundingClientRect().left < numRect.left);
+                const after = ordered.filter(b => b.getBoundingClientRect().left >= numRect.right);
+                const btn = direction > 0 ? (after[0] || ordered[ordered.length - 1]) : (before[before.length - 1] || ordered[0]);
+                if (btn && !btn.disabled) { btn.click(); return { found: true, current: cur, clicked: true }; }
+                return { found: true, current: cur, clicked: false };
+              }
+              row = row.parentElement;
+            }
+            return { found: false };
+          }, step.label, dir).catch(() => ({ found: false }));
+        };
+        let res0 = await stepOnce(0);
+        if (res0.found && !isNaN(target)) {
+          let current = res0.current, guard = 0;
+          while (current !== target && guard < 30) {
+            const r = await stepOnce(current < target ? 1 : -1);
+            if (!r.found || r.clicked === false) break;
+            await new Promise(r => setTimeout(r, 200));
+            const rc = await stepOnce(0);
+            if (!rc.found) break;
+            current = rc.current;
+            guard++;
+          }
+          if (current !== target) {
+            warnings.push(`Couldn't set "${step.label || 'count'}" to ${target} (ended at ${current}) — it may not be fully correct.`);
+          }
+        } else {
+          warnings.push(`Couldn't find the "${step.label || 'count'}" counter on this run — it may not have been set.`);
+        }
+        await new Promise(r => setTimeout(r, 300));
       }
     }
     onProgress?.('Extracting results...');
@@ -1854,7 +2153,7 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
     });
     clearTimeout(replayTimeout);
     await browser.close();
-    return data;
+    return { ...data, warnings };
   } catch (err) {
     clearTimeout(replayTimeout);
     await browser.close();
@@ -1900,13 +2199,23 @@ app.post('/api/workflows/:id/chat', requireAuth, async (req, res) => {
   if (ai) {
     emit('status', { text: 'Understanding your request...' });
     try {
+      // Recorded field names/labels are raw text scraped from arbitrary web pages — they can
+      // contain quotes, currency symbols, newlines, or other characters a smaller/free-tier model
+      // can mangle when asked to reproduce them verbatim as a JSON key, breaking the whole
+      // response (seen with a flight-result label like "US-Bangla Airlines৳ 9,974" picked up as a
+      // toggle name). Exchanging safe, positional IDs ("v0", "v1"...) instead of the real name
+      // removes this failure mode entirely, regardless of how messy any future site's own text is.
+      const idToName = {};
+      variables.forEach((v, vi) => { idToName['v' + vi] = v.name; });
       const varList = variables.length
-        ? variables.map(v => {
-            if (v.type === 'choice') return `  - ${v.name}: label="${v.label||v.name}", type=choice, must be one of [${(v.options||[]).map(o=>`"${o}"`).join(', ')}], current="${v.defaultValue||''}"`;
-            if (v.type === 'slider') return `  - ${v.name}: label="${v.label||v.name}", type=number, range ${v.min}-${v.max}, current=${v.defaultValue}`;
-            if (v.type === 'toggle') return `  - ${v.name}: label="${v.label||v.name}", type=on/off toggle, answer "yes" or "no", current="${v.defaultValue||'no'}"`;
-            if (v.type === 'action') return `  - ${v.name}: label="${v.label||v.name}", type=action — answer "yes" ONLY if the user explicitly asks to ${v.label||v.name}, otherwise "no"`;
-            return `  - ${v.name}: label="${v.label||v.name}", example="${v.defaultValue||''}"`;
+        ? variables.map((v, vi) => {
+            const id = 'v' + vi;
+            if (v.type === 'choice') return `  - ${id}: label="${v.label||v.name}", type=choice, must be one of [${(v.options||[]).map(o=>`"${o}"`).join(', ')}], current="${v.defaultValue||''}"`;
+            if (v.type === 'slider') return `  - ${id}: label="${v.label||v.name}", type=number, range ${v.min}-${v.max}, current=${v.defaultValue}`;
+            if (v.type === 'stepper') return `  - ${id}: label="${v.label||v.name}", type=count — answer with a plain whole number (e.g. "3"), current=${v.defaultValue}`;
+            if (v.type === 'toggle') return `  - ${id}: label="${v.label||v.name}", type=on/off toggle, answer "yes" or "no", current="${v.defaultValue||'no'}"`;
+            if (v.type === 'action') return `  - ${id}: label="${v.label||v.name}", type=action — answer "yes" ONLY if the user explicitly asks to ${v.label||v.name}, otherwise "no"`;
+            return `  - ${id}: label="${v.label||v.name}", example="${v.defaultValue||''}"`;
           }).join('\n')
         : '  (no variables — runs the same every time)';
 
@@ -1915,20 +2224,19 @@ app.post('/api/workflows/:id/chat', requireAuth, async (req, res) => {
 API: "${w.name}"
 Today: ${new Date().toDateString()}
 
-Variables to fill (use the EXACT key names shown):
+Variables to fill (use the id shown, e.g. "v0", as the JSON key — NOT the label):
 ${varList}
 
 User said: "${message}"
 
 Rules:
-- Include EVERY variable listed above as a key in the JSON — no exceptions
-- Use the EXACT variable name as the JSON key (copy it character for character), even though the
-  user will almost never say that exact name — match by MEANING, not wording. They might use a
-  synonym, a shortened version, or just describe the field in passing (e.g. a variable named
-  "Most Useful Aspect" should be filled from something like "the labs were the best part", a
-  variable named "Instructor" should match "prof was Dr. Khan" or just "Dr. Khan"). Read the
-  whole message once, decide which part of it belongs to which variable, then assign each piece —
-  don't require the user to label their own sentence.
+- Include EVERY variable listed above as a key in the JSON, using its id (v0, v1, ...) — no exceptions
+- Match by the variable's label/MEANING, not wording — the user will almost never use that exact
+  label. They might use a synonym, a shortened version, or just describe the field in passing
+  (e.g. a variable labeled "Most Useful Aspect" should be filled from something like "the labs
+  were the best part", one labeled "Instructor" should match "prof was Dr. Khan" or just
+  "Dr. Khan"). Read the whole message once, decide which part of it belongs to which variable,
+  then assign each piece — don't require the user to label their own sentence.
 - Convert relative dates to real dates (e.g. "next friday" → "2026-07-03")
 - For origin/destination: include city name as typed, e.g. "Dhaka", "Sylhet", "London"
 - If user doesn't mention a variable at all, keep its current/example value — never invent one
@@ -1939,19 +2247,45 @@ Rules:
 - For password/email fields: always use the example value unchanged
 
 Return ONLY this JSON (no other text):
-{"inputs":{"EXACT_VAR_NAME":"value"},"understood":"One sentence describing the task"}`, 500);
+{"inputs":{"v0":"value"},"understood":"One sentence describing the task"}`, 500);
 
       // Extract JSON robustly — handle markdown fences and find balanced braces
       const cleaned = raw.replace(/```[\w]*\n?/g, '').replace(/\n?```/g, '').trim();
       const jsonStr = extractBalancedJSON(cleaned);
-      if (jsonStr) {
-        const p = JSON.parse(jsonStr);
-        inputs     = { ...constants, ...(p.inputs || {}) };
-        understood = p.understood || '';
+      const byId = {};
+      let understoodRaw = '';
+      // Primary path: strict parse of the whole object.
+      try {
+        const p = JSON.parse(jsonStr || cleaned);
+        Object.assign(byId, p.inputs || {});
+        understoodRaw = p.understood || '';
+      } catch (_) {
+        // The free/small model occasionally emits slightly malformed JSON (an unescaped quote or
+        // symbol inside a value, a stray newline). Because we fully control the key format (v0, v1,
+        // ...), we can salvage each value directly with a targeted regex over the raw text instead
+        // of failing the entire request over one bad character. This makes a formatting slip a
+        // non-event rather than a hard crash the user can't do anything about.
+        const src = jsonStr || cleaned;
+        const strRe = /"(v\d+)"\s*:\s*"((?:[^"\\]|\\.)*)"/g;   // string values
+        const numRe = /"(v\d+)"\s*:\s*(-?\d+(?:\.\d+)?)/g;      // bare number values
+        let m;
+        while ((m = strRe.exec(src))) byId[m[1]] = m[2].replace(/\\"/g, '"');
+        while ((m = numRe.exec(src))) if (byId[m[1]] === undefined) byId[m[1]] = m[2];
+        const um = src.match(/"understood"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+        if (um) understoodRaw = um[1].replace(/\\"/g, '"');
       }
+      // Map the safe "v0"/"v1" ids the model used back to the real (possibly messy) variable names.
+      const byRealName = {};
+      Object.entries(byId).forEach(([id, val]) => {
+        const realName = idToName[id];
+        if (realName) byRealName[realName] = val;
+      });
+      inputs     = { ...constants, ...byRealName };
+      understood = understoodRaw || '';
     } catch (aiErr) {
-      emit('error', { text: '⚠️ AI error: ' + aiErr.message });
-      return res.end();
+      // Never hard-fail the whole run on an AI hiccup — fall through and replay with recorded
+      // defaults (backfilled just below), which at least reproduces the original recorded search.
+      console.log('[chat] AI extraction error (continuing with defaults):', aiErr.message);
     }
   }
 
@@ -2042,10 +2376,17 @@ Last line must be: ACTION: [2-3 word action label e.g. "Book Cheapest", "View Fl
     actionLabel = 'Open Page';
   }
 
+  // Surface any field the replay couldn't confidently set, instead of silently reporting success
+  // regardless — the end user has no server logs to check, so this is the only place they'd ever
+  // find out a field didn't actually get applied this run.
+  if (result.warnings && result.warnings.length) {
+    summary += `\n\n⚠️ ${result.warnings.join(' ')}`;
+  }
+
   // Never echo credential values back to the browser, even the owning user's own — it's an
   // unnecessary trip for a secret to take, and this payload could end up in client-side logs.
   const { __credential_email, __credential_password, ...inputsUsed } = inputs;
-  emit('result', { summary, actionLabel, result, inputsUsed });
+  emit('result', { summary, actionLabel, result, inputsUsed, warnings: result.warnings || [] });
   res.end();
 });
 

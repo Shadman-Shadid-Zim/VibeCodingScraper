@@ -768,7 +768,7 @@ function showReview(steps){
   const login=findLoginFields(steps);
   const loginIdx=new Set();
   if(login){loginIdx.add(login.pwIdx); if(login.emailIdx!==-1)loginIdx.add(login.emailIdx);}
-  const fills=steps.filter((s,idx)=>(s.type==='fill'||s.type==='choice'||s.type==='slider'||s.type==='toggle')&&!loginIdx.has(idx));
+  const fills=steps.filter((s,idx)=>(s.type==='fill'||s.type==='choice'||s.type==='slider'||s.type==='toggle'||s.type==='autocomplete'||s.type==='date'||s.type==='stepper')&&!loginIdx.has(idx));
   const nav=steps.filter(s=>s.type==='navigate').length;
   const clicks=steps.filter(s=>s.type==='click').length;
   const hasLoginChoice=recCookies.length>0||login;
@@ -819,6 +819,18 @@ function showReview(steps){
       title=step.label||'Checkbox';
       sub=`You turned it <strong>${step.newState?'ON':'OFF'}</strong> — as a Variable, the AI can switch it either way on request`;
       defaultName=step.label||('toggle_'+i);
+    } else if(step.type==='autocomplete'){
+      title=step.label||'Search field';
+      sub=`You typed: <strong>"${step.value}"</strong> and picked: <strong>"${step.selectedLabel}"</strong>`;
+      defaultName=step.label||('search_'+i);
+    } else if(step.type==='date'){
+      title=step.label||'Date';
+      sub=`You picked: <strong>${step.value}</strong>`;
+      defaultName=step.label||('date_'+i);
+    } else if(step.type==='stepper'){
+      title=step.label||'Count';
+      sub=`You set it to: <strong>${step.value}</strong>`;
+      defaultName=step.label||('count_'+i);
     } else {
       title=step.label||step.selector;
       sub=`You typed: <strong>"${step.value}"</strong>`;
@@ -870,7 +882,7 @@ async function saveWorkflow(){
   const login=findLoginFields(recSteps);
   const loginIdx=new Set();
   if(login){loginIdx.add(login.pwIdx); if(login.emailIdx!==-1)loginIdx.add(login.emailIdx);}
-  const fills=recSteps.filter((s,idx)=>(s.type==='fill'||s.type==='choice'||s.type==='slider'||s.type==='toggle'||s.type==='autocomplete'||s.type==='date')&&!loginIdx.has(idx));
+  const fills=recSteps.filter((s,idx)=>(s.type==='fill'||s.type==='choice'||s.type==='slider'||s.type==='toggle'||s.type==='autocomplete'||s.type==='date'||s.type==='stepper')&&!loginIdx.has(idx));
   const variables=[]; const constants={};
   // Guarantees no two fields ever silently share an identity — if the default name (or a name
   // left unedited) collides with another field's, auto-append " 2", " 3"... rather than let two
@@ -883,6 +895,20 @@ async function saveWorkflow(){
     usedNames.add(candidate);
     return candidate;
   };
+  // Many sites reuse the exact same placeholder/label text across semantically DIFFERENT fields
+  // (ShareTrip's origin and destination boxes both say "Flying from Airport/City") — the internal
+  // name is already made unique above, but the AI never sees that name, only the label (to stay
+  // robust to messy recorded text, see the safe v0/v1 id exchange server-side). If two fields'
+  // labels are identical, the AI has no way to tell them apart and can leave the wrong one
+  // unchanged (confirmed: a "fly to London" request left the destination as its old recorded
+  // city because both fields showed as "Flying from Airport/City"). Dedupe labels the same way.
+  const usedLabels=new Set();
+  const uniqueLabel=(base)=>{
+    let candidate=base||'Field', n=2;
+    while(usedLabels.has(candidate)) candidate=`${base} ${n++}`;
+    usedLabels.add(candidate);
+    return candidate;
+  };
   fills.forEach((step,i)=>{
     const type=document.querySelector(`[name="st-${i}"]:checked`)?.value||'variable';
     const vname=uniqueName(document.getElementById(`vname-${i}`)?.value.trim()||`input_${i}`);
@@ -890,13 +916,15 @@ async function saveWorkflow(){
     if(type==='variable'){
       recSteps[idx].isVariable=true; recSteps[idx].variableName=vname;
       if(step.type==='choice'){
-        variables.push({name:vname,label:step.groupName||vname,defaultValue:step.selectedLabel,type:'choice',options:(step.options||[]).map(o=>o.label)});
+        variables.push({name:vname,label:uniqueLabel(step.groupName||vname),defaultValue:step.selectedLabel,type:'choice',options:(step.options||[]).map(o=>o.label)});
       } else if(step.type==='slider'){
-        variables.push({name:vname,label:step.label||vname,defaultValue:step.value,type:'slider',min:step.min,max:step.max});
+        variables.push({name:vname,label:uniqueLabel(step.label||vname),defaultValue:step.value,type:'slider',min:step.min,max:step.max});
       } else if(step.type==='toggle'){
-        variables.push({name:vname,label:step.label||vname,defaultValue:step.newState?'yes':'no',type:'toggle'});
+        variables.push({name:vname,label:uniqueLabel(step.label||vname),defaultValue:step.newState?'yes':'no',type:'toggle'});
+      } else if(step.type==='stepper'){
+        variables.push({name:vname,label:uniqueLabel(step.label||vname),defaultValue:step.value,type:'stepper'});
       } else {
-        variables.push({name:vname,label:step.label||vname,defaultValue:step.value,type:'text'});
+        variables.push({name:vname,label:uniqueLabel(step.label||vname),defaultValue:step.value,type:'text'});
       }
     } else {
       recSteps[idx].isVariable=false;
