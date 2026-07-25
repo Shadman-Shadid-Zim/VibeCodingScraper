@@ -1543,6 +1543,13 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
         // "dove" leaves the stray "soap" glued onto the new term, producing a broken hybrid query.
         // Matching by prefix and replacing the full param value avoids that class of corruption.
         let url = step.url;
+        // Google Forms/Docs render their UI in the viewer's account/locale language — a form
+        // recorded while the UI showed English replays with a Bengali (or other) "Submit" button,
+        // so the recorded English label no longer matches and the submit click falls back to a
+        // fragile positional index. Force hl=en so recorded labels stay valid under any account.
+        if (/docs\.google\.com\/forms/.test(url) && !/[?&]hl=/.test(url)) {
+          url += (url.includes('?') ? '&' : '?') + 'hl=en';
+        }
         if (url.includes('?')) {
           try {
             const u = new URL(url);
@@ -1596,6 +1603,13 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
         // and navigate somewhere bad — and let the submit-button rescue below find the real one.
         const unhelpfulLabel = !step.label || step.label === step.tag || /^(button|a|span|div)$/i.test(step.label);
         const iconLeaf = /^(path|svg|use|i)$/i.test(step.selector);
+        // A recorded click whose LABEL reads like a submit action but was captured on an inner
+        // text/leaf element (e.g. Google Forms' Submit is a <span> inside the real role=button, so
+        // clicking the span alone often doesn't fire the button's handler). We still let the normal
+        // click try first, but if it produces no navigation we run the submit rescue to click the
+        // actual button. Kept separate from submitShaped so it does NOT skip the primary click.
+        const submitLikeLabel = nextStep && nextStep.type === 'navigate' &&
+          /^(submit|search|continue|go|apply|find|next|book|proceed|done|order|buy)$/i.test((step.label || '').trim());
         const submitShaped = iconLeaf || (unhelpfulLabel && nextStep && nextStep.type === 'navigate');
         await page.waitForSelector(step.selector, { timeout: 3000 }).catch(() => {});
         const urlBeforeClick = page.url();
@@ -1645,10 +1659,20 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
         // reverting to its recorded default flight). `submitShaped` (computed above) already
         // identified this shape and made us skip the untrustworthy primary click; now find and
         // click the real submit button so the SITE rebuilds the URL from the fields we set.
-        if (!skipNextNavigate && submitShaped) {
+        if (!skipNextNavigate && (submitShaped || submitLikeLabel)) {
           const before = page.url();
-          const btn = await page.evaluateHandle(() => {
+          const wantLabel = (step.label || '').trim();
+          const btn = await page.evaluateHandle((wantLabel) => {
             const vis = e => e && e.offsetHeight > 0 && e.offsetWidth > 0;
+            const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            // 0) If we have a submit-like label, prefer the visible button/role=button whose own
+            //    text matches it exactly (Google Forms "Submit" role=button, etc.).
+            if (wantLabel) {
+              const w = norm(wantLabel);
+              const exact = Array.from(document.querySelectorAll('button, [role="button"], input[type="submit"]'))
+                .filter(vis).find(e => norm(e.textContent) === w || norm(e.getAttribute('aria-label')) === w);
+              if (exact) return exact;
+            }
             // 1) Explicit submit control.
             let el = document.querySelector('button[type="submit"], input[type="submit"]');
             if (vis(el)) return el;
@@ -1677,7 +1701,7 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
               return (Math.max(r, g, bl) - Math.min(r, g, bl)) > 40 && Math.max(r, g, bl) > 80;
             });
             return colored.length ? colored[colored.length - 1] : null;
-          }).catch(() => null);
+          }, wantLabel).catch(() => null);
           const el = btn?.asElement() || null;
           if (el) {
             await el.scrollIntoView().catch(() => {});
@@ -1769,15 +1793,22 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
           warnings.push(`Couldn't find the "${label}" field on this run — it may not have been typed in.`);
         }
         await new Promise(r => setTimeout(r, 700));
-        // Pick the suggestion so the selection actually commits (typed text alone reverts to the
-        // widget's prior selection on blur). Click the option whose text best matches what was
-        // typed (falls back to the first). A trusted ElementHandle click on the [role=option] is
-        // what commits the widget's real value — verified on ShareTrip: this makes origin/dest
-        // codes update in the submitted search URL, where the old JS-clear approach left them stale.
+        // `autocomplete:true` is set on EVERY recorded fill (it just marks a snapshot-captured
+        // value), so most of these are ordinary text fields (Google Forms, plain inputs) with NO
+        // suggestion dropdown — typing alone is the whole job there. Only a TRUE typeahead field
+        // (airport/location/product search) shows a [role=option] dropdown, and for those the
+        // selection must be committed by clicking a suggestion or the form submits the stale prior
+        // value. So: look for a dropdown; pick from it if present; if none appears, it's a plain
+        // field — do nothing and DON'T warn (a "no suggestion" warning on every text field is just
+        // noise and looks broken).
         if (step.autocomplete && fillEl) {
-          let picked = false;
-          for (let attempt = 0; attempt < 4 && !picked; attempt++) {
-            await new Promise(r => setTimeout(r, attempt ? 500 : 300));
+          let picked = false, dropdownSeen = false;
+          for (let attempt = 0; attempt < 3 && !picked; attempt++) {
+            await new Promise(r => setTimeout(r, attempt ? 500 : 350));
+            const optCount = await page.$$eval('[role="option"], [role="listbox"] li, .pac-container .pac-item',
+              els => els.filter(o => o.offsetHeight > 0).length).catch(() => 0);
+            if (!optCount) continue; // no dropdown yet (or plain field)
+            dropdownSeen = true;
             const handle = await page.evaluateHandle((wanted) => {
               const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
               const opts = Array.from(document.querySelectorAll('[role="option"], [role="listbox"] li, .pac-container .pac-item'))
@@ -1793,11 +1824,12 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
               picked = true;
             }
           }
-          if (!picked) {
+          // Only a genuine typeahead (a dropdown DID appear) that we then failed to commit is worth
+          // flagging. A field that never showed a dropdown is just a normal text input — no warning.
+          if (dropdownSeen && !picked) {
             await page.keyboard.press('ArrowDown').catch(() => {});
             await new Promise(r => setTimeout(r, 250));
             await page.keyboard.press('Enter').catch(() => {});
-            warnings.push(`No suggestion appeared for "${value}" in "${label}" — it may not have been set correctly.`);
           }
           await new Promise(r => setTimeout(r, 500));
         }
