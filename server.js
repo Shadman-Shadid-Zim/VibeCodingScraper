@@ -2645,6 +2645,30 @@ app.post('/api/admin/users/:id/grant', requireAuth, requireAdmin, (req, res) => 
   res.json({ success: true, user: { id: user.id, email: user.email, plan, plan_expires_at: expires ? expires.toISOString() : null } });
 });
 
+// Owner-only: list APIs the admin can hand out (their own), for the "give a specific user access
+// to a specific API" grant below.
+app.get('/api/admin/api-list', requireAuth, requireAdmin, (req, res) => {
+  const rows = db.prepare('SELECT id, name FROM workflows WHERE user_id=? ORDER BY created_at DESC').all(req.user.id);
+  res.json(rows);
+});
+
+// Owner-only: manually give a specific user access to a specific API — the same effect as a
+// marketplace purchase, but free and instant (e.g. after the buyer paid you outside the app).
+// Records a purchase row so the API appears in that user's collection and they can run it.
+app.post('/api/admin/grant-api', requireAuth, requireAdmin, (req, res) => {
+  const { userId, workflowId } = req.body;
+  const user = db.prepare('SELECT id,email FROM users WHERE id=?').get(userId);
+  if (!user) return res.status(404).json({ error: 'User not found.' });
+  const wf = db.prepare('SELECT id,user_id,name FROM workflows WHERE id=?').get(workflowId);
+  if (!wf) return res.status(404).json({ error: 'API not found.' });
+  if (wf.user_id === userId) return res.status(400).json({ error: 'That user already owns this API.' });
+  const already = db.prepare('SELECT id FROM purchases WHERE buyer_id=? AND workflow_id=?').get(userId, workflowId);
+  if (already) return res.json({ success: true, message: 'That user already has access.' });
+  db.prepare('INSERT INTO purchases (id,buyer_id,workflow_id,seller_id,amount) VALUES (?,?,?,?,0)')
+    .run(uuidv4(), userId, workflowId, wf.user_id);
+  res.json({ success: true, message: `${user.email} now has access to "${wf.name}".` });
+});
+
 // ─── SPA FALLBACK ─────────────────────────────────────────────────────────────
 app.use((req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 

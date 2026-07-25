@@ -1450,11 +1450,12 @@ async function adminAct(id,action){
 // Owner-only: manually grant a subscription to any user by email, bypassing payment entirely.
 // This whole tab only renders for the admin account (page is gated by requireAdmin server-side
 // too — a non-admin hitting these endpoints gets a 403, not just a hidden button).
+let _grantApiList=[];
 function renderGrantAccess(list){
   list.innerHTML=`
     <div class="card">
       <h3 style="font-weight:700;margin-bottom:8px;font-size:15px">🔑 Grant Access Manually</h3>
-      <p style="color:var(--muted);font-size:13px;margin-bottom:14px;line-height:1.6">Search a user by email or name and set their plan directly — no payment needed. Only visible to you.</p>
+      <p style="color:var(--muted);font-size:13px;margin-bottom:14px;line-height:1.6">Search a user by email or name, then either set their <strong>plan</strong> or give them access to a <strong>specific API</strong> — no payment needed. Only visible to you.</p>
       <div style="display:flex;gap:8px;margin-bottom:16px">
         <input class="input" id="grant-search" placeholder="Search by Gmail or name..." style="font-size:13px" onkeydown="if(event.key==='Enter')searchGrantUsers()">
         <button class="btn btn-primary" onclick="searchGrantUsers()" style="white-space:nowrap">Search</button>
@@ -1462,6 +1463,8 @@ function renderGrantAccess(list){
       <div id="grant-results" style="display:flex;flex-direction:column;gap:10px"></div>
     </div>
   `;
+  // preload the API list used by the per-user "give API access" dropdown
+  api('GET','/api/admin/api-list').then(r=>{ if(r.ok) _grantApiList=r.data; });
 }
 
 async function searchGrantUsers(){
@@ -1471,22 +1474,41 @@ async function searchGrantUsers(){
   const r=await api('GET','/api/admin/users/search?q='+encodeURIComponent(q));
   if(!r.ok){ results.innerHTML=`<div style="color:var(--danger)">${r.data.error||'Search failed.'}</div>`; return; }
   if(!r.data.length){ results.innerHTML=`<div style="color:var(--muted);font-size:13px">No users found.</div>`; return; }
+  const apiOptions=_grantApiList.map(a=>`<option value="${a.id}">${(a.name||'API').replace(/</g,'&lt;')}</option>`).join('');
   results.innerHTML=r.data.map(u=>`
-    <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
-      <div>
-        <div style="font-weight:600;font-size:14px">${u.name} <span style="color:var(--muted);font-weight:400;font-size:12px">${u.email}</span></div>
-        <div style="font-size:12px;color:var(--muted);margin-top:2px">Current: <strong style="color:var(--text)">${u.plan}</strong>${u.plan_expires_at?' · expires '+new Date(u.plan_expires_at).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}):''}</div>
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+        <div>
+          <div style="font-weight:600;font-size:14px">${u.name} <span style="color:var(--muted);font-weight:400;font-size:12px">${u.email}</span></div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px">Current: <strong style="color:var(--text)">${u.plan}</strong>${u.plan_expires_at?' · expires '+new Date(u.plan_expires_at).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}):''}</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select class="input" id="grant-plan-${u.id}" style="font-size:12px;padding:8px;width:auto">
+            <option value="free">Free</option>
+            <option value="monthly">Monthly</option>
+            <option value="yearly" selected>Yearly</option>
+          </select>
+          <button class="btn btn-success" style="font-size:12px;padding:8px 14px;white-space:nowrap" onclick="grantPlan('${u.id}','${u.email}')">✅ Grant plan</button>
+        </div>
       </div>
-      <div style="display:flex;gap:8px;align-items:center">
-        <select class="input" id="grant-plan-${u.id}" style="font-size:12px;padding:8px;width:auto">
-          <option value="free">Free</option>
-          <option value="monthly">Monthly</option>
-          <option value="yearly" selected>Yearly</option>
-        </select>
-        <button class="btn btn-success" style="font-size:12px;padding:8px 14px;white-space:nowrap" onclick="grantPlan('${u.id}','${u.email}')">✅ Grant</button>
+      <div style="display:flex;gap:8px;align-items:center;border-top:1px solid var(--border);padding-top:10px">
+        <span style="font-size:12px;color:var(--muted);white-space:nowrap">Give access to API:</span>
+        <select class="input" id="grant-api-${u.id}" style="font-size:12px;padding:8px;flex:1">${apiOptions||'<option value="">No APIs</option>'}</select>
+        <button class="btn btn-primary" style="font-size:12px;padding:8px 14px;white-space:nowrap" onclick="grantApiAccess('${u.id}','${u.email}')">🎁 Give API</button>
       </div>
     </div>
   `).join('');
+}
+
+async function grantApiAccess(userId,email){
+  const sel=document.getElementById('grant-api-'+userId);
+  const workflowId=sel&&sel.value;
+  if(!workflowId) return toast('No API selected.','error');
+  const apiName=sel.options[sel.selectedIndex].text;
+  if(!confirm(`Give ${email} access to "${apiName}"?`)) return;
+  const r=await api('POST','/api/admin/grant-api',{userId, workflowId});
+  if(!r.ok) return toast(r.data.error||'Failed.','error');
+  toast(r.data.message||`${email} now has access!`,'success');
 }
 
 async function grantPlan(userId,email){
