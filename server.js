@@ -93,12 +93,24 @@ async function askClaude(prompt, maxTokens = 600) {
     return (textBlock?.text || '').trim();
   }
   if (groqAI) {
-    const r = await groqAI.chat.completions.create({
-      model: 'llama-3.1-8b-instant',
-      max_tokens: maxTokens,
-      messages: [{ role: 'user', content: prompt }],
-    });
-    return r.choices[0].message.content.trim();
+    // Free Groq occasionally times out or 503s transiently. A single failure otherwise drops the
+    // whole run to recorded defaults (searches the OLD term), so retry a couple of times with an
+    // explicit per-attempt timeout before giving up.
+    let lastErr;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const r = await groqAI.chat.completions.create({
+          model: 'llama-3.1-8b-instant',
+          max_tokens: maxTokens,
+          messages: [{ role: 'user', content: prompt }],
+        }, { timeout: 15000, maxRetries: 0 });
+        return r.choices[0].message.content.trim();
+      } catch (e) {
+        lastErr = e;
+        await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
+      }
+    }
+    throw lastErr;
   }
   throw new Error('No AI key set — add ANTHROPIC_API_KEY or GROQ_API_KEY to .env');
 }
@@ -192,6 +204,9 @@ db.exec(`
 try { db.exec("ALTER TABLE pending_recordings ADD COLUMN cookies TEXT DEFAULT '[]'"); } catch (_) {}
 try { db.exec("ALTER TABLE workflows ADD COLUMN auth_mode TEXT DEFAULT 'shared'"); } catch (_) {}
 try { db.exec("ALTER TABLE workflows ADD COLUMN login_domain TEXT DEFAULT ''"); } catch (_) {}
+// personal_login=1 → replay uses a private local browser profile for the OWNER only, so they can
+// sign in once (e.g. Google) for forms that force login. Never applies to buyers/marketplace runs.
+try { db.exec("ALTER TABLE workflows ADD COLUMN personal_login INTEGER DEFAULT 0"); } catch (_) {}
 
 // ─── EMAIL ────────────────────────────────────────────────────────────────────
 const mailer = nodemailer.createTransport({
@@ -1327,7 +1342,12 @@ app.get('/api/workflows/:id', requireAuth, (req, res) => {
 app.put('/api/workflows/:id', requireAuth, (req, res) => {
   const w = db.prepare('SELECT * FROM workflows WHERE id=? AND user_id=?').get(req.params.id, req.user.id);
   if (!w) return res.status(404).json({ error: 'Not found.' });
-  const { name, description, is_public, price, price_description, variables, constants, renameVariables, updateConstants } = req.body;
+  const { name, description, is_public, price, price_description, variables, constants, renameVariables, updateConstants, personal_login } = req.body;
+  // Personal-login and publishing are mutually exclusive: a personal-login workflow relies on the
+  // owner's own local browser session, which must never be shared — so turning it on forces the
+  // workflow private, and it can't be published while on.
+  const newPersonalLogin = personal_login !== undefined ? (personal_login ? 1 : 0) : w.personal_login;
+  const forcedPrivate = newPersonalLogin ? 0 : (is_public ? 1 : 0);
 
   // Only touch variables/constants/steps if the request actually provided something for them —
   // this endpoint is also used for simple metadata edits (name, price, publish toggle) that don't
@@ -1386,8 +1406,8 @@ app.put('/api/workflows/:id', requireAuth, (req, res) => {
     newConstants = rebuilt;
   }
 
-  db.prepare('UPDATE workflows SET name=?,description=?,is_public=?,price=?,price_description=?,variables=?,constants=?,steps=? WHERE id=?')
-    .run(name || w.name, description ?? w.description, is_public ? 1 : 0, price ?? 0, price_description ?? '', JSON.stringify(newVariables), JSON.stringify(newConstants), JSON.stringify(scrubCredentialSteps(newSteps)), w.id);
+  db.prepare('UPDATE workflows SET name=?,description=?,is_public=?,price=?,price_description=?,variables=?,constants=?,steps=?,personal_login=? WHERE id=?')
+    .run(name || w.name, description ?? w.description, forcedPrivate, price ?? 0, price_description ?? '', JSON.stringify(newVariables), JSON.stringify(newConstants), JSON.stringify(scrubCredentialSteps(newSteps)), newPersonalLogin, w.id);
   res.json({ success: true });
 });
 
@@ -1428,14 +1448,22 @@ app.post('/api/workflows/:id/call', requireAuth, checkUsageLimit, async (req, re
   const savedCookies = credentialInputs ? [] : decryptCookiesField(w.session_cookies);
 
   try {
-    const result = await replayWorkflow(steps, inputs, savedCookies);
+    const result = await replayWorkflow(steps, inputs, savedCookies, undefined, { profileDir: ownerProfileDir(w, req.user.id, isOwner) });
     res.json({ success: true, result });
   } catch (err) {
     res.status(500).json({ error: 'Execution failed: ' + err.message });
   }
 });
 
-async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
+// Personal-login profile directory — a per-owner-per-workflow local Chrome profile. Returned ONLY
+// when the workflow opted into personal_login AND the person running is its owner, so the stored
+// Google/site session never reaches a buyer. Undefined otherwise (normal ephemeral browser).
+function ownerProfileDir(w, userId, isOwner) {
+  if (!w.personal_login || !isOwner || w.user_id !== userId) return undefined;
+  return path.join(__dirname, 'login_profiles', `${userId}_${w.id}`);
+}
+
+async function replayWorkflow(steps, inputs, savedCookies = [], onProgress, opts = {}) {
   const fsp = require('fs');
   const chromePaths = [
     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
@@ -1443,28 +1471,60 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
   ];
   const executablePath = chromePaths.find(p => fsp.existsSync(p));
 
-  // HEADLESS=1 (cloud deployment: no display on the server). Default stays headful
-  // locally — a visible browser evades bot detection better and demos well.
-  const browser = await puppeteer.launch({
+  // "Personal login" mode: use a persistent Chrome profile on THIS machine (opts.profileDir).
+  // The Google/site login the owner does once inside that window stays in the profile — never in
+  // the workflow's stored cookies, never shared/sold — so forms that require a real Google sign-in
+  // (e.g. anything with a file-upload question) can still be automated for the owner's own use.
+  const launchArgs = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled', '--window-size=1280,800', '--window-position=50,50'];
+  const launchOpts = {
     headless: process.env.HEADLESS === '1' ? 'new' : false,
     executablePath,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled', '--window-size=1280,800', '--window-position=50,50'],
-  });
-  const page = await browser.newPage();
+    args: launchArgs,
+  };
+  if (opts.profileDir) {
+    try { fsp.mkdirSync(opts.profileDir, { recursive: true }); } catch (_) {}
+    launchOpts.userDataDir = opts.profileDir;
+  }
+  const browser = await puppeteer.launch(launchOpts);
+  const page = (await browser.pages())[0] || await browser.newPage();
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36');
   await page.evaluateOnNewDocument(() => { Object.defineProperty(navigator,'webdriver',{get:()=>undefined}); });
 
-  // Block images/fonts/media (keep stylesheets — some sites need them)
-  await page.setRequestInterception(true);
-  page.on('request', req => {
-    if (['image','font','media'].includes(req.resourceType())) req.abort();
-    else req.continue();
-  });
+  // Block images/fonts/media to speed replay — but NOT in personal-login mode, where the owner is
+  // looking at (and interacting with) the real page to sign in, so it must render fully.
+  if (!opts.profileDir) {
+    await page.setRequestInterception(true);
+    page.on('request', req => {
+      if (['image','font','media'].includes(req.resourceType())) req.abort();
+      else req.continue();
+    });
+  }
 
-  // Global 90-second replay timeout — prevents 5-minute hangs on bad recordings
-  const replayTimeout = setTimeout(async () => {
+  // Global replay timeout — prevents 5-minute hangs on bad recordings. Much longer in personal-login
+  // mode, since the owner may need a minute or two to complete a sign-in inside the window.
+  let replayTimeout = setTimeout(async () => {
     try { await browser.close(); } catch (_) {}
-  }, 90000);
+  }, opts.profileDir ? 300000 : 90000);
+
+  // When a step lands on a real sign-in wall (e.g. a Google Form with a file-upload question forces
+  // Google login), pause the automation and let the owner log in by hand in the visible window,
+  // then continue once they're back on the target site. Only meaningful in personal-login mode
+  // (the profile persists the session, so this is a one-time step per profile).
+  const waitForManualLogin = async () => {
+    if (!opts.profileDir) return;
+    const isLoginWall = (u) => /accounts\.google\.com\/(v\d+\/)?signin|accounts\.google\.com\/signin|ServiceLogin|\/InteractiveLogin/i.test(u || '');
+    if (!isLoginWall(page.url())) return;
+    onProgress?.('🔐 Please sign in to your account in the browser window — the automation will continue automatically once you are logged in...');
+    clearTimeout(replayTimeout); // don't kill the browser while the human is logging in
+    const deadline = Date.now() + 240000; // up to 4 minutes to sign in
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 1500));
+      if (!isLoginWall(page.url())) break;
+    }
+    // give the post-login redirect back to the form a moment to settle
+    await new Promise(r => setTimeout(r, 2500));
+    replayTimeout = setTimeout(async () => { try { await browser.close(); } catch (_) {} }, 120000);
+  };
 
   // Helper: detect if the current page is a bot-block / CAPTCHA page
   const isBotBlocked = async () => {
@@ -1599,8 +1659,18 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
         onProgress?.(`Opening ${host}...`);
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
         await new Promise(r => setTimeout(r, 1500));
+        // A navigate can land on a sign-in wall (e.g. a file-upload Google Form). In personal-login
+        // mode, pause here for the owner to sign in by hand; otherwise it's a hard block.
+        await waitForManualLogin();
         if (await isBotBlocked()) throw new Error('BOT_BLOCKED:' + url);
       } else if (step.type === 'click') {
+        // File-upload triggers ("Add File", "Upload", choose-file) open a native OS / Drive picker
+        // that automation can't drive and that would hang the run — skip them. The rest of the form
+        // still fills; a warning tells the user the file wasn't attached.
+        if (/add file|upload|choose file|attach|browse|ফাইল/i.test(step.label || '')) {
+          warnings.push(`Skipped "${step.label}" — file uploads can't be automated, so attach the file yourself before submitting.`);
+          continue;
+        }
         // Optional actions (Add to Cart, Buy Now, Apply...) run only when the user asked for them.
         if (step.isOptionalAction) {
           const want = String(inputs[step.actionName] ?? 'no').trim();
@@ -2412,7 +2482,8 @@ Return ONLY this JSON (no other text):
       JSON.parse(w.steps || '[]'),
       inputs,
       savedCookies,
-      (msg) => emit('progress', { text: msg })
+      (msg) => emit('progress', { text: msg }),
+      { profileDir: ownerProfileDir(w, req.user.id, isOwner) }
     );
   } catch (err) {
     const isBlocked = err.message.startsWith('BOT_BLOCKED');

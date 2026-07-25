@@ -463,6 +463,13 @@
       <div style="margin-bottom:14px"><label class="label">Price (৳ BDT, 0 = free)</label><input class="input" type="number" id="edit-price" min="0" placeholder="0"></div>
       <div style="margin-bottom:14px"><label class="label">Tell buyers what this API does</label><textarea class="input" id="edit-price-desc" rows="3" placeholder="What website does it work on? What inputs does it need? What data does it return?"></textarea></div>
     </div>
+    <div style="margin-bottom:14px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--bg)">
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:14px">
+        <input type="checkbox" id="edit-personal-login" style="margin-top:3px" onchange="if(this.checked){document.getElementById('pub-no').checked=true;document.getElementById('mkt-fields').style.display='none';}">
+        <span>🔐 <strong>This site needs my personal login</strong> (e.g. a Google Form that requires sign-in, or a file upload)<br>
+        <span style="color:var(--muted);font-size:12px">Runs in a private browser profile on <strong>this computer</strong>. You sign in once inside the window and it stays logged in for future runs. Your login is <strong>never saved into the API and never shared</strong> — so this API can't be published while this is on. Works only when <strong>you</strong> run it.</span></span>
+      </label>
+    </div>
     <div id="edit-vars-section" style="margin-bottom:14px;display:none">
       <label class="label">Variable Names</label>
       <p style="color:var(--muted);font-size:12px;margin:2px 0 10px">Rename any field the AI fills in — useful if recording left duplicate or unclear names like "input".</p>
@@ -1022,7 +1029,7 @@ function buildCard(w){
       <span style="font-size:12px;color:var(--muted)">${w.call_count||0} runs</span>
       <div style="display:flex;gap:6px">
         <button class="btn btn-primary" style="font-size:13px;padding:8px 18px;border-radius:10px" onclick='openChat("${w.id}",${JSON.stringify(w.name)},${JSON.stringify(w.variables||[])})'>▶ Run</button>
-        <button class="btn btn-outline" style="font-size:13px;padding:8px 12px;border-radius:10px" onclick='openEdit(${JSON.stringify({id:w.id,name:w.name,description:w.description,is_public:w.is_public,price:w.price,price_description:w.price_description,variables:w.variables||[],constants:w.constants||{}})})'>✏️</button>
+        <button class="btn btn-outline" style="font-size:13px;padding:8px 12px;border-radius:10px" onclick='openEdit(${JSON.stringify({id:w.id,name:w.name,description:w.description,is_public:w.is_public,price:w.price,price_description:w.price_description,personal_login:w.personal_login,variables:w.variables||[],constants:w.constants||{}})})'>✏️</button>
         <button class="btn btn-danger" style="font-size:13px;padding:8px 12px;border-radius:10px" onclick="delApi('${w.id}')">🗑</button>
       </div>
     </div>
@@ -1048,6 +1055,7 @@ function openEdit(w){
   document.getElementById('pub-yes').checked=w.is_public==1;
   document.getElementById('pub-no').checked=w.is_public!=1;
   document.getElementById('mkt-fields').style.display=w.is_public?'':'none';
+  document.getElementById('edit-personal-login').checked=w.personal_login==1;
 
   const vars=w.variables||[];
   const section=document.getElementById('edit-vars-section');
@@ -1101,6 +1109,7 @@ async function saveEdit(){
     is_public:document.getElementById('pub-yes').checked,
     price:parseInt(document.getElementById('edit-price').value)||0,
     price_description:document.getElementById('edit-price-desc').value,
+    personal_login:document.getElementById('edit-personal-login').checked,
     renameVariables:vars.length?newNames:undefined,
     updateConstants:constEntries.length?{labels:newConstLabels,values:newConstValues}:undefined,
   });

@@ -6,3 +6,4 @@ workflows.json
 *.db-wal
 server_out.txt
 server_err.txt
+login_profiles/
