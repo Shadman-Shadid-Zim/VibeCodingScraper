@@ -1634,20 +1634,27 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress, opts
             url = u.toString();
           } catch (_) {}
         }
-        // urlParams: choice variables that drive a query parameter (e.g. sort order).
-        // Shape: { sort: { variable: 'Sort', map: { 'Price Low To High': 'priceasc', ... } } }
-        // The AI outputs a human label; we map it to the site's URL token. Empty token = remove param.
+        // urlParams: variables that drive query parameters directly (e.g. flight search:
+        // origin/destination city->airport-code, or a sort choice->token). Shape:
+        //   { origin: { variable:'Origin', map:{ 'Dhaka':'DAC', ... } },       // label -> token
+        //     originCity: { variable:'Origin', raw:true },                     // value used as-is
+        //     depart: { variable:'Date', raw:true }, adult: { variable:'Passengers', raw:true } }
+        // The AI outputs a human value; map it to the site's token when a map is given, otherwise
+        // (raw) use the value directly. Empty token = remove param.
         if (step.urlParams) {
           try {
             const u = new URL(url);
             const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
             for (const [param, spec] of Object.entries(step.urlParams)) {
               const want = inputs[spec.variable];
-              if (want === undefined) continue;
+              if (want === undefined || want === '') continue;
               let mapped = null;
               for (const [label, val] of Object.entries(spec.map || {})) {
                 if (norm(label) === norm(want) || norm(label).includes(norm(want)) || norm(want).includes(norm(label))) { mapped = val; break; }
               }
+              // No map match: fall back to the raw requested value when the spec allows it (or has
+              // no map at all) — dates, passenger counts, free-text params can't be enumerated.
+              if (mapped === null && (spec.raw || !spec.map)) mapped = String(want);
               if (mapped === null) continue;
               if (mapped === '') u.searchParams.delete(param);
               else u.searchParams.set(param, mapped);
@@ -1658,7 +1665,9 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress, opts
         const host = (() => { try { return new URL(url).hostname; } catch { return url; } })();
         onProgress?.(`Opening ${host}...`);
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
-        await new Promise(r => setTimeout(r, 1500));
+        // Result-heavy pages (flight lists, search results) fetch their data via AJAX after load —
+        // a step may set settleMs to wait longer for that content instead of the default settle.
+        await new Promise(r => setTimeout(r, step.settleMs || 1500));
         // A navigate can land on a sign-in wall (e.g. a file-upload Google Form). In personal-login
         // mode, pause here for the owner to sign in by hand; otherwise it's a hard block.
         await waitForManualLogin();
