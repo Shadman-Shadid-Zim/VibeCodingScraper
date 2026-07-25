@@ -1524,7 +1524,9 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
     // search term this run actually used). Trust the click's real navigation instead.
     let skipNextNavigate = false;
 
-    for (const step of stepsToRun) {
+    for (let stepIdx = 0; stepIdx < stepsToRun.length; stepIdx++) {
+      const step = stepsToRun[stepIdx];
+      const nextStep = stepsToRun[stepIdx + 1];
       const shouldSkipThisNavigate = step.type === 'navigate' && skipNextNavigate;
       skipNextNavigate = false;
       if (step.type === 'navigate') {
@@ -1588,6 +1590,13 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
         }
         const label = step.label || step.selector.replace(/[#.[\]"'=]/g,' ').trim().slice(0,30);
         onProgress?.(`Clicking "${label}"...`);
+        // An icon-only submit control (empty/tag-name label) followed by a recorded navigate is a
+        // submit whose recorded selector+matchIndex can't be trusted (a generic class, positional
+        // index that shifts). Skip the blind matchIndex click — which could hit the WRONG button
+        // and navigate somewhere bad — and let the submit-button rescue below find the real one.
+        const unhelpfulLabel = !step.label || step.label === step.tag || /^(button|a|span|div)$/i.test(step.label);
+        const iconLeaf = /^(path|svg|use|i)$/i.test(step.selector);
+        const submitShaped = iconLeaf || (unhelpfulLabel && nextStep && nextStep.type === 'navigate');
         await page.waitForSelector(step.selector, { timeout: 3000 }).catch(() => {});
         const urlBeforeClick = page.url();
         // Selectors built from a shared class (common for tab/filter/accordion headers styled
@@ -1595,7 +1604,7 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
         // time, falling back to the recorded matchIndex position.
         let disambiguated = false;
         let labelMatched = false;
-        try {
+        if (!submitShaped) try {
           const matches = await page.$$(step.selector);
           if (matches.length > 1) {
             let target = null;
@@ -1621,39 +1630,53 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
             if (target) { await target.scrollIntoView().catch(() => {}); await target.click().catch(() => {}); disambiguated = true; }
           }
         } catch (_) {}
-        if (!disambiguated) await page.click(step.selector).catch(() => {});
+        if (!disambiguated && !submitShaped) await page.click(step.selector).catch(() => {});
         await Promise.race([
           page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 4000 }).catch(() => {}),
           new Promise(r => setTimeout(r, 250)),
         ]);
         skipNextNavigate = page.url() !== urlBeforeClick;
 
-        // Submit/search-button rescue: a click recorded against a bare icon leaf (selector is just
-        // "path"/"svg"/"use"/"i" — an icon INSIDE a real button, with no stable identity of its own)
-        // can't be re-found and silently misses. When that misses on what is really the form's
-        // submit control, the run falls back to the recorded navigate URL, which still encodes the
-        // ORIGINAL recorded search — so every field we just carefully filled gets thrown away (this
-        // is exactly why ShareTrip reverted to New York→Dubai). If such an icon click produced no
-        // navigation, find and click the real search/submit button so the SITE rebuilds the URL
-        // from the fields we set. (Recordings made after the record-side icon→button fix won't hit
-        // this, but existing ones still need it.)
-        if (!skipNextNavigate && /^(path|svg|use|i)$/i.test(step.selector)) {
+        // Submit/search-button rescue. A search/submit control is frequently an icon-only button
+        // (or was recorded as the bare <svg>/<path> icon inside it) with NO stable identity — a
+        // generic class + positional matchIndex that can't be re-found at replay. When that click
+        // misses, the run falls back to the recorded navigate URL, which still encodes the ORIGINAL
+        // recorded search, throwing away every field we just filled (this is why ShareTrip kept
+        // reverting to its recorded default flight). `submitShaped` (computed above) already
+        // identified this shape and made us skip the untrustworthy primary click; now find and
+        // click the real submit button so the SITE rebuilds the URL from the fields we set.
+        if (!skipNextNavigate && submitShaped) {
           const before = page.url();
           const btn = await page.evaluateHandle(() => {
             const vis = e => e && e.offsetHeight > 0 && e.offsetWidth > 0;
-            // Prefer an explicit submit control first.
-            let el = document.querySelector('button[type="submit"], input[type="submit"], form button:last-of-type');
+            // 1) Explicit submit control.
+            let el = document.querySelector('button[type="submit"], input[type="submit"]');
             if (vis(el)) return el;
-            // Then a BUTTON (not <a> — promo links falsely match "search") whose OWN short label or
-            // aria-label reads like a submit action. Keep the text short so a long promotional
-            // string that merely contains the word doesn't match.
+            // 2) A BUTTON (not <a> — promo links falsely match "search") whose OWN short label or
+            //    aria-label reads like a submit action.
             const re = /^(search|find|submit|go|apply|search flights?|show results?|explore)\b/i;
             const btns = Array.from(document.querySelectorAll('button, [role="button"]')).filter(vis);
-            return btns.find(e => {
+            const byText = btns.find(e => {
               const t = (e.textContent || '').trim();
               const a = (e.getAttribute('aria-label') || '').trim();
               return (t.length <= 20 && re.test(t)) || re.test(a);
-            }) || null;
+            });
+            if (byText) return byText;
+            // 3) Icon-only submit: a prominent COLORED icon button (svg, no text, saturated
+            //    non-transparent background), excluding utility icons (clear/close/menu/etc).
+            //    Search/submit buttons are near-universally the one visually-emphasized colored
+            //    button in a form; utility icon buttons are transparent/grey.
+            const util = /clear|close|remove|menu|back|prev|next|delete|cancel|edit/i;
+            const colored = btns.filter(b => {
+              if ((b.textContent || '').trim() || !b.querySelector('svg')) return false;
+              if (util.test(b.getAttribute('aria-label') || '')) return false;
+              const m = getComputedStyle(b).backgroundColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+              if (!m) return false;
+              const [r, g, bl, al] = [+m[1], +m[2], +m[3], m[4] === undefined ? 1 : +m[4]];
+              if (al < 0.5) return false;
+              return (Math.max(r, g, bl) - Math.min(r, g, bl)) > 40 && Math.max(r, g, bl) > 80;
+            });
+            return colored.length ? colored[colored.length - 1] : null;
           }).catch(() => null);
           const el = btn?.asElement() || null;
           if (el) {
@@ -1720,27 +1743,41 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
         await page.waitForSelector(step.selector, { timeout: 3000 }).catch(() => {});
         const fillEl = await pickEl(step);
         if (fillEl) {
-          await fillEl.click({ clickCount: 3 }).catch(() => {});
-          await fillEl.evaluate(el => {
-            // Clear both value property and contenteditable text
-            if (el.value !== undefined) el.value = '';
-            else el.textContent = '';
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-          }).catch(() => {});
-          await fillEl.type(String(value), { delay: 50 }).catch(() => {});
+          if (step.autocomplete) {
+            // Search/typeahead fields (airport/location pickers) are stateful widgets, not plain
+            // inputs — clearing them via JS (el.value='') corrupts the widget's internal state so
+            // the suggestion you later click never actually COMMITS (the visible text updates but
+            // the real selected value stays the OLD one, and the form submits the stale selection).
+            // Drive it exactly like a human: focus, select-all with the keyboard, then TYPE with
+            // real key events so the widget treats it as a genuine edit and opens its dropdown.
+            await fillEl.click().catch(() => {});
+            await new Promise(r => setTimeout(r, 250));
+            await page.keyboard.down('Control').catch(() => {});
+            await page.keyboard.press('KeyA').catch(() => {});
+            await page.keyboard.up('Control').catch(() => {});
+            await page.keyboard.type(String(value), { delay: 80 }).catch(() => {});
+          } else {
+            await fillEl.click({ clickCount: 3 }).catch(() => {});
+            await fillEl.evaluate(el => {
+              if (el.value !== undefined) el.value = '';
+              else el.textContent = '';
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+            }).catch(() => {});
+            await fillEl.type(String(value), { delay: 50 }).catch(() => {});
+          }
         } else {
           warnings.push(`Couldn't find the "${label}" field on this run — it may not have been typed in.`);
         }
         await new Promise(r => setTimeout(r, 700));
-        // If this was a search/autocomplete field, a suggestion dropdown likely appeared — on many
-        // sites (airport pickers, address fields) the typed text ALONE doesn't register a real
-        // value; you must pick a suggestion. Prefer clicking the option whose text best matches
-        // what was typed (falling back to the first one), which is far more reliable than
-        // ArrowDown+Enter keyboard nav that many custom dropdowns ignore.
-        if (step.autocomplete) {
+        // Pick the suggestion so the selection actually commits (typed text alone reverts to the
+        // widget's prior selection on blur). Click the option whose text best matches what was
+        // typed (falls back to the first). A trusted ElementHandle click on the [role=option] is
+        // what commits the widget's real value — verified on ShareTrip: this makes origin/dest
+        // codes update in the submitted search URL, where the old JS-clear approach left them stale.
+        if (step.autocomplete && fillEl) {
           let picked = false;
           for (let attempt = 0; attempt < 4 && !picked; attempt++) {
-            await new Promise(r => setTimeout(r, attempt ? 400 : 0));
+            await new Promise(r => setTimeout(r, attempt ? 500 : 300));
             const handle = await page.evaluateHandle((wanted) => {
               const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
               const opts = Array.from(document.querySelectorAll('[role="option"], [role="listbox"] li, .pac-container .pac-item'))
@@ -1756,11 +1793,11 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
               picked = true;
             }
           }
-          // Keyboard fallback if no clickable option element was found at all
           if (!picked) {
             await page.keyboard.press('ArrowDown').catch(() => {});
             await new Promise(r => setTimeout(r, 250));
             await page.keyboard.press('Enter').catch(() => {});
+            warnings.push(`No suggestion appeared for "${value}" in "${label}" — it may not have been set correctly.`);
           }
           await new Promise(r => setTimeout(r, 500));
         }
