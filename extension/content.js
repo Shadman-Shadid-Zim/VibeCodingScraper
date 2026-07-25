@@ -119,7 +119,18 @@
         optionInput = e.target;
       } else {
         const wrapLabel = e.target.closest('label');
-        if (wrapLabel) optionInput = wrapLabel.querySelector('input[type="radio"], input[type="checkbox"]');
+        if (wrapLabel) {
+          optionInput = wrapLabel.querySelector('input[type="radio"], input[type="checkbox"]');
+          // Very common pattern (Bootstrap custom-control, Material, plain HTML): the real
+          // <input> is NOT inside the label — the label references it by id via for="...", and the
+          // native input is visually hidden behind a styled box. Without this, clicking such a
+          // checkbox/radio is recorded as a meaningless generic click and never replays (this is
+          // why Rokomari's "Gift Wrap" and similar ticks weren't captured).
+          if (!optionInput && wrapLabel.htmlFor) {
+            const ref = document.getElementById(wrapLabel.htmlFor);
+            if (ref && ref.tagName === 'INPUT' && (ref.type === 'radio' || ref.type === 'checkbox')) optionInput = ref;
+          }
+        }
       }
 
       if (optionInput && optionInput.name) {

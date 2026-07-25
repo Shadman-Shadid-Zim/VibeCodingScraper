@@ -680,7 +680,18 @@ app.post('/api/recording/start', requireAuth, checkUsageLimit, async (req, res) 
               optionInput = e.target;
             } else {
               const wrapLabel = e.target.closest('label');
-              if (wrapLabel) optionInput = wrapLabel.querySelector('input[type="radio"], input[type="checkbox"]');
+              if (wrapLabel) {
+                optionInput = wrapLabel.querySelector('input[type="radio"], input[type="checkbox"]');
+                // Common pattern (Bootstrap custom-control, Material, plain HTML): the real <input>
+                // is NOT inside the label — the label references it by id via for="...", with the
+                // native input visually hidden behind a styled box. Without this, such a checkbox/
+                // radio is recorded as a meaningless generic click and never replays (this is why
+                // Rokomari's "Gift Wrap" and similar ticks weren't captured).
+                if (!optionInput && wrapLabel.htmlFor) {
+                  const ref = document.getElementById(wrapLabel.htmlFor);
+                  if (ref && ref.tagName === 'INPUT' && (ref.type === 'radio' || ref.type === 'checkbox')) optionInput = ref;
+                }
+              }
             }
             if (optionInput && optionInput.name) {
               const groupScope = findGroupScope(optionInput, optionInput.name);
@@ -2075,7 +2086,19 @@ async function replayWorkflow(steps, inputs, savedCookies = [], onProgress) {
             const cur = await tEl.evaluate(el => !!el.checked).catch(() => null);
             if (cur !== null && cur !== desired) {
               await tEl.scrollIntoView().catch(() => {});
-              await tEl.click().catch(() => {});
+              // The native checkbox is very often visually hidden behind a styled label
+              // (Bootstrap custom-control etc.) — a direct click on the zero-size input fails, so
+              // click the associated <label for="id"> (or the input's wrapping label) instead,
+              // which is what a user actually clicks. Fall back to a synthetic click if neither.
+              const clicked = await tEl.click().then(() => true).catch(() => false);
+              if (!clicked) {
+                const labelClicked = await tEl.evaluate(el => {
+                  const lab = (el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`)) || el.closest('label');
+                  if (lab) { lab.click(); return true; }
+                  el.click(); return true;
+                }).catch(() => false);
+                if (!labelClicked) warnings.push(`Couldn't toggle the "${step.label || 'option'}" checkbox on this run.`);
+              }
             }
           } else {
             warnings.push(`Couldn't find the "${step.label || 'option'}" checkbox on this run — it may not have been set.`);
