@@ -2475,6 +2475,21 @@ Return ONLY this JSON (no other text):
     const words = String(v.label || v.name).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
     if (words.length && words.every(wd => msgLower.includes(wd))) inputs[v.name] = 'yes';
   });
+  // Deterministic origin/destination safety net: weak models routinely flip "from X to Y" (Groq
+  // answered Origin=Dhaka/Destination=Jeddah for "from jeddah to dhaka"). When the message states
+  // the direction explicitly AND the workflow has an origin-like and a destination-like variable
+  // (by name/label), trust the sentence over the model.
+  const originVar = variables.find(v => /(^|\b)(from|origin|departure|leaving|flying from|depart)\b/i.test(`${v.name} ${v.label || ''}`));
+  const destVar   = variables.find(v => v !== originVar && /(^|\b)(to|destination|arrival|going to|flying to|arriv)\b/i.test(`${v.name} ${v.label || ''}`));
+  if (originVar && destVar) {
+    // "from <A> to <B>" (preferred), else a bare "<A> to <B>" somewhere in the message.
+    const m = message.match(/\bfrom\s+(.+?)\s+to\s+(.+?)(?=\s+(?:on|for|in|,|next|this|tomorrow|today|$)|$)/i)
+           || message.match(/\b([A-Za-z][A-Za-z .'-]+?)\s+to\s+([A-Za-z][A-Za-z .'-]+?)(?=\s+(?:on|for|in|,|next|this|tomorrow|today|$)|$)/i);
+    if (m) {
+      const a = m[1].trim(), b = m[2].trim();
+      if (a && b && a.length < 40 && b.length < 40) { inputs[originVar.name] = a; inputs[destVar.name] = b; }
+    }
+  }
   if (credentialInputs) Object.assign(inputs, credentialInputs);
   console.log(`[chat] "${w.name}" message="${message}" → inputs=${JSON.stringify({ ...inputs, __credential_password: inputs.__credential_password ? '(hidden)' : undefined })}`);
   if (!understood) understood = `Running ${w.name}...`;
