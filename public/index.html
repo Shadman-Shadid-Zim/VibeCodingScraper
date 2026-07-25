@@ -460,7 +460,11 @@
       </div>
     </div>
     <div id="mkt-fields" style="display:none">
-      <div style="margin-bottom:14px"><label class="label">Price (৳ BDT, 0 = free)</label><input class="input" type="number" id="edit-price" min="0" placeholder="0"></div>
+      <div style="margin-bottom:14px">
+        <label class="label">Your price (৳ BDT, 0 = free)</label>
+        <input class="input" type="number" id="edit-price" min="0" placeholder="0" oninput="updatePriceBreakdown()">
+        <div id="price-breakdown" style="font-size:12px;color:var(--muted);margin-top:6px;line-height:1.5"></div>
+      </div>
       <div style="margin-bottom:14px"><label class="label">Tell buyers what this API does</label><textarea class="input" id="edit-price-desc" rows="3" placeholder="What website does it work on? What inputs does it need? What data does it return?"></textarea></div>
     </div>
     <div style="margin-bottom:14px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--bg)">
@@ -1052,6 +1056,7 @@ function openEdit(w){
   document.getElementById('edit-desc').value=w.description||'';
   document.getElementById('edit-price').value=w.price||0;
   document.getElementById('edit-price-desc').value=w.price_description||'';
+  updatePriceBreakdown();
   document.getElementById('pub-yes').checked=w.is_public==1;
   document.getElementById('pub-no').checked=w.is_public!=1;
   document.getElementById('mkt-fields').style.display=w.is_public?'':'none';
@@ -1089,6 +1094,17 @@ function openEdit(w){
     clist.innerHTML='';
   }
   openModal('modal-edit');
+}
+
+// Platform commission (10%) — the seller sets what they receive, buyer pays that + fee.
+const COMMISSION_RATE=0.10;
+function updatePriceBreakdown(){
+  const el=document.getElementById('price-breakdown'); if(!el) return;
+  const p=parseInt(document.getElementById('edit-price').value)||0;
+  if(p<=0){ el.innerHTML='Free — buyers add it to their collection at no cost.'; return; }
+  const fee=Math.round(p*COMMISSION_RATE);
+  const buyer=p+fee;
+  el.innerHTML=`You receive <strong style="color:var(--text)">৳${p}</strong> · +10% platform fee <strong style="color:var(--text)">৳${fee}</strong> · <span style="color:var(--warning)">Buyer pays <strong>৳${buyer}</strong></span>`;
 }
 
 async function saveEdit(){
@@ -1380,7 +1396,10 @@ async function loadMarketplace(){
     d.innerHTML=`
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
         <div style="font-size:15px;font-weight:700">${w.name}</div>
-        <div style="font-size:20px;font-weight:800;color:${w.price?'var(--warning)':'var(--success)'};white-space:nowrap">${w.price?'৳'+w.price:'Free'}</div>
+        <div style="text-align:right;white-space:nowrap">
+          <div style="font-size:20px;font-weight:800;color:${w.price?'var(--warning)':'var(--success)'}">${w.price?'৳'+w.final_price:'Free'}</div>
+          ${w.price?`<div style="font-size:10px;color:var(--muted)">incl. 10% platform fee</div>`:''}
+        </div>
       </div>
       ${w.description?`<p style="color:var(--muted);font-size:13px;margin-bottom:10px;line-height:1.5">${w.description}</p>`:''}
       ${w.price_description?`<div style="background:var(--bg);border-radius:8px;padding:10px;color:var(--muted);font-size:12px;margin-bottom:10px;line-height:1.5">${w.price_description}</div>`:''}
@@ -1388,8 +1407,8 @@ async function loadMarketplace(){
         <div style="width:26px;height:26px;background:linear-gradient(135deg,#6366f1,#8b5cf6);border-radius:50%;display:flex;align-items:center;justify-content:center;color:white;font-size:11px;font-weight:700">${(w.seller_name||'?')[0]}</div>
         <span style="font-size:12px;color:var(--muted)">${w.seller_name} · ${w.buyers||0} buyers · ${w.call_count||0} calls</span>
       </div>
-      <button class="btn btn-primary" style="width:100%;font-size:13px" onclick="buyApi('${w.id}','${w.name}',${w.price||0})">
-        ${w.price?'🛒 Buy for ৳'+w.price:'➕ Add Free to Collection'}
+      <button class="btn btn-primary" style="width:100%;font-size:13px" onclick="buyApi('${w.id}','${w.name}',${w.final_price||0})">
+        ${w.price?'🛒 Buy for ৳'+w.final_price:'➕ Add Free to Collection'}
       </button>
     `;
     grid.appendChild(d);

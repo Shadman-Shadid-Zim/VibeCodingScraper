@@ -118,6 +118,15 @@ async function askClaude(prompt, maxTokens = 600) {
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
+// Marketplace commission: the seller sets the price they want to receive; the platform adds this
+// percentage on top, and the BUYER pays the total. buyerPrice/platformCommission are the single
+// source of truth used everywhere a price is shown or charged, so seller and buyer never disagree.
+const COMMISSION_RATE = 0.10;
+// Round the commission itself (avoids float artifacts like 100*1.10 = 110.00000001 -> ceil 111),
+// then the buyer price is exactly seller + commission so the numbers always reconcile.
+const platformCommission = (sellerPrice) => Math.round((Number(sellerPrice) || 0) * COMMISSION_RATE);
+const buyerPrice = (sellerPrice) => (Number(sellerPrice) || 0) + platformCommission(sellerPrice);
+
 // ─── DATABASE ─────────────────────────────────────────────────────────────────
 const db = new Database(path.join(__dirname, 'shadmansapi.db'));
 db.pragma('journal_mode = WAL');
@@ -2588,7 +2597,15 @@ app.get('/api/marketplace', requireAuth, (req, res) => {
     WHERE w.is_public = 1
     ORDER BY w.call_count DESC, w.created_at DESC
   `).all();
-  res.json(items.map(i => ({ ...i, variables: JSON.parse(i.variables || '[]') })));
+  // The seller's `price` is what THEY receive; the buyer pays that plus the platform commission.
+  // Send the computed final price + commission so both sides see the same numbers.
+  res.json(items.map(i => ({
+    ...i,
+    variables: JSON.parse(i.variables || '[]'),
+    seller_price: i.price,
+    commission: platformCommission(i.price),
+    final_price: buyerPrice(i.price),
+  })));
 });
 
 app.post('/api/marketplace/:id/purchase', requireAuth, (req, res) => {
@@ -2599,7 +2616,8 @@ app.post('/api/marketplace/:id/purchase', requireAuth, (req, res) => {
   const already = db.prepare('SELECT id FROM purchases WHERE buyer_id=? AND workflow_id=?').get(req.user.id, req.params.id);
   if (already) return res.status(400).json({ error: 'You already own this API.' });
 
-  if (w.price > 0) return res.json({ requiresPayment: true, price: w.price, workflowId: w.id });
+  // The buyer pays the seller's price PLUS the platform commission.
+  if (w.price > 0) return res.json({ requiresPayment: true, price: buyerPrice(w.price), sellerPrice: w.price, commission: platformCommission(w.price), workflowId: w.id });
 
   db.prepare('INSERT INTO purchases (id,buyer_id,workflow_id,seller_id,amount) VALUES (?,?,?,?,0)')
     .run(uuidv4(), req.user.id, req.params.id, w.user_id);
