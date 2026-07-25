@@ -1055,7 +1055,7 @@ function openEdit(w){
   document.getElementById('pub-yes').checked=w.is_public==1;
   document.getElementById('pub-no').checked=w.is_public!=1;
   document.getElementById('mkt-fields').style.display=w.is_public?'':'none';
-  document.getElementById('edit-personal-login').checked=w.personal_login==1;
+  const _pl=document.getElementById('edit-personal-login'); if(_pl)_pl.checked=w.personal_login==1;
 
   const vars=w.variables||[];
   const section=document.getElementById('edit-vars-section');
@@ -1109,7 +1109,7 @@ async function saveEdit(){
     is_public:document.getElementById('pub-yes').checked,
     price:parseInt(document.getElementById('edit-price').value)||0,
     price_description:document.getElementById('edit-price-desc').value,
-    personal_login:document.getElementById('edit-personal-login').checked,
+    personal_login:document.getElementById('edit-personal-login')?.checked||false,
     renameVariables:vars.length?newNames:undefined,
     updateConstants:constEntries.length?{labels:newConstLabels,values:newConstValues}:undefined,
   });
