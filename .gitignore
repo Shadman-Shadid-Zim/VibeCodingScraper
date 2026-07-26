@@ -8,3 +8,5 @@ server_out.txt
 server_err.txt
 login_profiles/
 gform_choice_debug.png
+~$*
+*.tmp
