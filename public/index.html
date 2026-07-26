@@ -56,9 +56,81 @@
   ::-webkit-scrollbar-thumb:hover{background:var(--primary)}
   textarea.input{resize:vertical}
   @media(max-width:700px){.auth-left{display:none!important}.auth-grid{grid-template-columns:1fr!important}.plans-grid{grid-template-columns:1fr!important}.stats-grid{grid-template-columns:1fr 1fr!important}}
+
+  /* ============ VISUAL UPGRADE (frontend only) ============ */
+  /* Animated aurora background — pure CSS, sits behind everything, never intercepts clicks */
+  #bg-aurora{position:fixed;inset:0;z-index:-2;overflow:hidden;pointer-events:none}
+  #bg-aurora .orb{position:absolute;border-radius:50%;filter:blur(90px);opacity:.55;animation:floaty 18s ease-in-out infinite}
+  #bg-aurora .o1{width:520px;height:520px;background:radial-gradient(circle,#6366f1,transparent 70%);top:-120px;left:-80px}
+  #bg-aurora .o2{width:460px;height:460px;background:radial-gradient(circle,#8b5cf6,transparent 70%);bottom:-140px;right:-60px;animation-delay:-6s}
+  #bg-aurora .o3{width:400px;height:400px;background:radial-gradient(circle,#06b6d4,transparent 70%);top:40%;left:55%;animation-delay:-11s}
+  #bg-aurora .o4{width:300px;height:300px;background:radial-gradient(circle,#ec4899,transparent 70%);top:60%;left:10%;animation-delay:-3s}
+  [data-theme="light"] #bg-aurora .orb{opacity:.32;filter:blur(80px)}
+  /* subtle grid texture over the aurora */
+  #bg-grid{position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.5;
+    background-image:linear-gradient(rgba(148,163,184,.06) 1px,transparent 1px),linear-gradient(90deg,rgba(148,163,184,.06) 1px,transparent 1px);
+    background-size:44px 44px;mask-image:radial-gradient(ellipse at 50% 0%,#000 40%,transparent 85%)}
+  [data-theme="light"] #bg-grid{opacity:.7}
+  @keyframes floaty{0%,100%{transform:translate(0,0) scale(1)}33%{transform:translate(40px,-30px) scale(1.08)}66%{transform:translate(-30px,25px) scale(.95)}}
+
+  /* keyframes */
+  @keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+  @keyframes shine{0%{background-position:200% center}100%{background-position:-200% center}}
+  @keyframes glowPulse{0%,100%{box-shadow:0 0 0 0 rgba(99,102,241,.0)}50%{box-shadow:0 0 24px 2px rgba(99,102,241,.35)}}
+  @keyframes floatY{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+
+  /* page transition */
+  .page.active{animation:fadeUp .5s cubic-bezier(.16,.84,.44,1) both}
+
+  /* glassmorphism + depth on cards */
+  .card{background:color-mix(in srgb,var(--surface) 82%,transparent);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+    box-shadow:0 4px 24px rgba(2,6,23,.18);transition:transform .25s cubic-bezier(.16,.84,.44,1),box-shadow .25s,border-color .25s}
+  .card:hover{transform:translateY(-3px);box-shadow:0 14px 40px rgba(2,6,23,.28)}
+  .api-card{background:color-mix(in srgb,var(--surface) 82%,transparent);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);transition:transform .25s cubic-bezier(.16,.84,.44,1),box-shadow .25s,border-color .25s}
+  .api-card:hover{transform:translateY(-4px)}
+
+  /* nav glass */
+  #main-nav{background:color-mix(in srgb,var(--surface) 78%,transparent)!important;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+
+  /* buttons: gradient + glow + subtle lift */
+  .btn-primary{background:linear-gradient(135deg,#6366f1,#8b5cf6)!important;box-shadow:0 6px 18px rgba(99,102,241,.35);position:relative}
+  .btn-primary:hover{transform:translateY(-2px);box-shadow:0 10px 28px rgba(99,102,241,.5)}
+  .btn-lg{position:relative;overflow:hidden}
+  .btn-lg::after{content:'';position:absolute;inset:0;background:linear-gradient(120deg,transparent 30%,rgba(255,255,255,.35),transparent 70%);transform:translateX(-120%);transition:transform .6s}
+  .btn-lg:hover::after{transform:translateX(120%)}
+
+  /* gradient text + animated variant */
+  .grad-text{background:linear-gradient(135deg,#818cf8,#a855f7,#06b6d4);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .grad-anim{background:linear-gradient(90deg,#818cf8,#a855f7,#06b6d4,#818cf8);background-size:200% auto;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;animation:shine 5s linear infinite}
+
+  /* stat cards pop + count-up feel */
+  .stats-grid .card{transition:transform .25s,box-shadow .25s}
+  .stats-grid .card:hover{transform:translateY(-4px) scale(1.02)}
+
+  /* staggered entrance helper */
+  .reveal{animation:fadeUp .6s cubic-bezier(.16,.84,.44,1) both}
+  .reveal.d1{animation-delay:.06s}.reveal.d2{animation-delay:.12s}.reveal.d3{animation-delay:.18s}.reveal.d4{animation-delay:.24s}.reveal.d5{animation-delay:.3s}
+
+  /* faq accordion polish */
+  .faq-item{transition:border-color .2s,background .2s,transform .2s}
+  .faq-item:hover{border-color:var(--primary);transform:translateX(2px)}
+  .faq-item .fa{overflow:hidden}
+
+  /* plan card shimmer border on popular */
+  .plan-card.popular{animation:glowPulse 3.5s ease-in-out infinite}
+
+  /* floating hero icon */
+  .float-icon{animation:floatY 4s ease-in-out infinite}
+
+  @media(prefers-reduced-motion:reduce){*{animation-duration:.001ms!important;animation-iteration-count:1!important}#bg-aurora .orb{animation:none}}
 </style>
 </head>
 <body>
+
+<!-- Animated aurora background (pure CSS, click-through) -->
+<div id="bg-aurora"><span class="orb o1"></span><span class="orb o2"></span><span class="orb o3"></span><span class="orb o4"></span></div>
+<div id="bg-grid"></div>
 
 <!-- NAV -->
 <nav id="main-nav" style="display:none;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:200">
@@ -91,17 +163,26 @@
 <!-- AUTH PAGE -->
 <div id="page-auth" class="page active" style="min-height:100vh">
   <div style="min-height:100vh;display:grid;grid-template-columns:1fr 1fr" class="auth-grid">
-    <div class="auth-left" style="background:linear-gradient(135deg,#0a0a1a,#1e1b4b);padding:60px 50px;display:flex;flex-direction:column;justify-content:center">
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:40px">
-        <div style="width:52px;height:52px;background:linear-gradient(135deg,#6366f1,#8b5cf6);border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:26px">⚡</div>
-        <div><div style="font-size:22px;font-weight:800;color:#a5b4fc">Shadman's API</div><div style="font-size:12px;color:#6366f1">No-Code Automation Platform</div></div>
-      </div>
-      <h1 style="font-size:38px;font-weight:800;line-height:1.2;color:#f1f5f9;margin-bottom:16px">Turn any website into a <span style="background:linear-gradient(135deg,#6366f1,#a855f7,#06b6d4);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">live API</span></h1>
-      <p style="color:#94a3b8;font-size:15px;line-height:1.8;margin-bottom:36px">Record what you do on any website and turn your actions into a reusable, shareable API. No coding required.</p>
-      <div style="display:flex;flex-direction:column;gap:16px">
-        <div style="display:flex;align-items:center;gap:14px"><div style="width:38px;height:38px;background:rgba(99,102,241,.2);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">🎙️</div><div style="font-size:14px;color:#94a3b8"><strong style="color:#e2e8f0">Record once</strong> — click Record, do your task on any website</div></div>
-        <div style="display:flex;align-items:center;gap:14px"><div style="width:38px;height:38px;background:rgba(99,102,241,.2);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">⚡</div><div style="font-size:14px;color:#94a3b8"><strong style="color:#e2e8f0">Run forever</strong> — replay with different inputs anytime</div></div>
-        <div style="display:flex;align-items:center;gap:14px"><div style="width:38px;height:38px;background:rgba(99,102,241,.2);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">🛍️</div><div style="font-size:14px;color:#94a3b8"><strong style="color:#e2e8f0">Sell to others</strong> — list on our marketplace and earn money</div></div>
+    <div class="auth-left" style="background:linear-gradient(140deg,#0a0a1a,#1e1b4b 55%,#2d1b53);padding:56px 50px;display:flex;flex-direction:column;justify-content:center;position:relative;overflow:hidden">
+      <div style="position:absolute;inset:0;opacity:.5;pointer-events:none;background:radial-gradient(600px 300px at 20% 10%,rgba(99,102,241,.25),transparent 70%),radial-gradient(500px 300px at 90% 90%,rgba(6,182,212,.18),transparent 70%)"></div>
+      <div style="position:relative">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:34px" class="reveal">
+          <div style="width:52px;height:52px;background:linear-gradient(135deg,#6366f1,#8b5cf6);border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:26px;box-shadow:0 8px 24px rgba(99,102,241,.5)" class="float-icon">⚡</div>
+          <div><div style="font-size:22px;font-weight:800;color:#a5b4fc">Shadman's API</div><div style="font-size:12px;color:#818cf8">No-Code Automation Platform</div></div>
+        </div>
+        <h1 style="font-size:38px;font-weight:800;line-height:1.2;color:#f1f5f9;margin-bottom:16px" class="reveal d1">Turn any website into a <span class="grad-anim">live API</span></h1>
+        <p style="color:#94a3b8;font-size:15px;line-height:1.8;margin-bottom:28px" class="reveal d2">Record what you do on any website — searching, filling forms, adding to cart, booking flights — and turn it into a reusable, shareable API you run by just <strong style="color:#c7d2fe">typing a sentence</strong>. No coding, ever.</p>
+        <div style="display:flex;flex-direction:column;gap:15px;margin-bottom:30px">
+          <div style="display:flex;align-items:center;gap:14px" class="reveal d2"><div style="width:38px;height:38px;background:rgba(99,102,241,.2);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">🎙️</div><div style="font-size:14px;color:#94a3b8"><strong style="color:#e2e8f0">Record once</strong> — do your task on any website, we capture every step</div></div>
+          <div style="display:flex;align-items:center;gap:14px" class="reveal d3"><div style="width:38px;height:38px;background:rgba(139,92,246,.2);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">🤖</div><div style="font-size:14px;color:#94a3b8"><strong style="color:#e2e8f0">Ask in plain English</strong> — AI fills the right fields and runs it live</div></div>
+          <div style="display:flex;align-items:center;gap:14px" class="reveal d4"><div style="width:38px;height:38px;background:rgba(6,182,212,.2);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">🛍️</div><div style="font-size:14px;color:#94a3b8"><strong style="color:#e2e8f0">Sell to others</strong> — publish to the marketplace and earn money</div></div>
+        </div>
+        <div style="display:flex;gap:26px;padding-top:22px;border-top:1px solid rgba(148,163,184,.15)" class="reveal d5">
+          <div><div style="font-size:24px;font-weight:800;color:#a5b4fc">6+</div><div style="font-size:11px;color:#64748b">interaction types</div></div>
+          <div><div style="font-size:24px;font-weight:800;color:#c4b5fd">4</div><div style="font-size:11px;color:#64748b">verified demos</div></div>
+          <div><div style="font-size:24px;font-weight:800;color:#67e8f9">55+</div><div style="font-size:11px;color:#64748b">cities mapped</div></div>
+          <div><div style="font-size:24px;font-weight:800;color:#6ee7b7">100%</div><div style="font-size:11px;color:#64748b">no-code</div></div>
+        </div>
       </div>
     </div>
     <div style="display:flex;align-items:center;justify-content:center;padding:40px;background:var(--bg)">
@@ -203,13 +284,14 @@
 <!-- HOME PAGE -->
 <div id="page-home" class="page">
   <div style="max-width:1200px;margin:0 auto;padding:36px 20px">
-    <div style="background:linear-gradient(135deg,#1e1b4b,#312e81);border-radius:20px;padding:36px;margin-bottom:28px;position:relative;overflow:hidden">
-      <div style="position:absolute;right:-10px;top:-30px;font-size:140px;opacity:.07;pointer-events:none">⚡</div>
-      <h1 style="font-size:26px;font-weight:800;color:#f1f5f9;margin-bottom:8px">Welcome back, <span id="home-user-name" style="color:#a5b4fc">there</span>! 👋</h1>
-      <p style="color:#94a3b8;font-size:14px;margin-bottom:24px">Ready to automate something? Record a workflow and turn it into an API in minutes.</p>
-      <div style="display:flex;gap:12px;flex-wrap:wrap">
+    <div style="background:linear-gradient(135deg,#1e1b4b,#312e81 60%,#3b1d6e);border-radius:20px;padding:38px;margin-bottom:28px;position:relative;overflow:hidden;box-shadow:0 20px 60px rgba(49,46,129,.4)">
+      <div style="position:absolute;right:-10px;top:-30px;font-size:150px;opacity:.08;pointer-events:none" class="float-icon">⚡</div>
+      <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(500px 220px at 85% 20%,rgba(139,92,246,.3),transparent 70%)"></div>
+      <h1 style="font-size:27px;font-weight:800;color:#f1f5f9;margin-bottom:8px;position:relative">Welcome back, <span id="home-user-name" class="grad-anim">there</span>! 👋</h1>
+      <p style="color:#c7d2fe;font-size:14px;margin-bottom:24px;position:relative;max-width:560px;line-height:1.7">Ready to automate something? Record a task once on any website and turn it into an API you run by typing a sentence.</p>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;position:relative">
         <button class="btn btn-primary btn-lg" onclick="showPage('recorder')">🎙️ Record New API</button>
-        <button class="btn" style="background:rgba(255,255,255,.1);color:#a5b4fc;border:1px solid rgba(165,180,252,.3)" class="btn-lg" onclick="showPage('marketplace')">🛍️ Browse Marketplace</button>
+        <button class="btn btn-lg" style="background:rgba(255,255,255,.1);color:#c7d2fe;border:1px solid rgba(165,180,252,.3)" onclick="showPage('marketplace')">🛍️ Browse Marketplace</button>
       </div>
     </div>
     <!-- Stats -->
@@ -232,30 +314,57 @@
       <div>
         <h2 style="font-size:18px;font-weight:700;margin-bottom:18px">How It Works</h2>
         <div style="display:flex;flex-direction:column;gap:14px">
-          <div style="display:flex;gap:14px;align-items:flex-start"><div class="step-dot">1</div><div><div style="font-weight:600;margin-bottom:3px">Click "Record New API"</div><div style="color:var(--muted);font-size:13px;line-height:1.6">A real browser window opens. You're now in recording mode.</div></div></div>
-          <div style="display:flex;gap:14px;align-items:flex-start"><div class="step-dot">2</div><div><div style="font-weight:600;margin-bottom:3px">Do your task on any website</div><div style="color:var(--muted);font-size:13px;line-height:1.6">Search, fill forms, click buttons — everything is captured automatically.</div></div></div>
-          <div style="display:flex;gap:14px;align-items:flex-start"><div class="step-dot">3</div><div><div style="font-weight:600;margin-bottom:3px">Click "Stop & Save"</div><div style="color:var(--muted);font-size:13px;line-height:1.6">Label which values change each time. Name and save your API.</div></div></div>
-          <div style="display:flex;gap:14px;align-items:flex-start"><div class="step-dot">4</div><div><div style="font-weight:600;margin-bottom:3px">Your API is ready!</div><div style="color:var(--muted);font-size:13px;line-height:1.6">Run it with new inputs, or sell it to others on the marketplace.</div></div></div>
+          <div style="display:flex;gap:14px;align-items:flex-start" class="reveal"><div class="step-dot">1</div><div><div style="font-weight:600;margin-bottom:3px">Click "Record New API"</div><div style="color:var(--muted);font-size:13px;line-height:1.6">A real browser window opens. You're now in recording mode.</div></div></div>
+          <div style="display:flex;gap:14px;align-items:flex-start" class="reveal d1"><div class="step-dot">2</div><div><div style="font-weight:600;margin-bottom:3px">Do your task on any website</div><div style="color:var(--muted);font-size:13px;line-height:1.6">Search, fill forms, tick boxes, pick dates, click buttons — everything is captured automatically.</div></div></div>
+          <div style="display:flex;gap:14px;align-items:flex-start" class="reveal d2"><div class="step-dot">3</div><div><div style="font-weight:600;margin-bottom:3px">Label Variable vs Constant</div><div style="color:var(--muted);font-size:13px;line-height:1.6">Mark which fields change each run (Variable) and which stay the same (Constant). Name and save.</div></div></div>
+          <div style="display:flex;gap:14px;align-items:flex-start" class="reveal d3"><div class="step-dot">4</div><div><div style="font-weight:600;margin-bottom:3px">Run it by typing a sentence</div><div style="color:var(--muted);font-size:13px;line-height:1.6">The AI reads your request, fills the variables, replays it live — or sell it on the marketplace.</div></div></div>
+        </div>
+
+        <!-- About card -->
+        <div class="card reveal d3" style="margin-top:24px;padding:22px;border:1px solid var(--border)">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+            <div style="width:36px;height:36px;background:linear-gradient(135deg,#6366f1,#8b5cf6);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px">💡</div>
+            <h2 style="font-size:18px;font-weight:700">About Shadman's API</h2>
+          </div>
+          <p style="color:var(--muted);font-size:13.5px;line-height:1.75;margin-bottom:14px">Automating a repetitive web task normally means writing custom code for every single website — impossible for non-programmers and brittle even for developers. <strong style="color:var(--text)">Shadman's API removes the code entirely.</strong> Recording replaces writing a scraper, and a plain-language chat replaces writing input logic. One generic engine handles text fields, dropdowns, checkboxes, sliders, quantity steppers, calendar dates and typeahead search — using standard web &amp; accessibility patterns, so it works across brand-new sites without a developer patching it each time.</p>
+          <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px">
+            <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px"><div style="font-size:12px;color:var(--muted);margin-bottom:2px">✅ Verified demos</div><div style="font-size:13px;font-weight:600">Daraz · Google Forms · Rokomari cart · Trip.com flights</div></div>
+            <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px"><div style="font-size:12px;color:var(--muted);margin-bottom:2px">🔒 Built-in security</div><div style="font-size:13px;font-weight:600">AES-256 encryption · logins never shared</div></div>
+            <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px"><div style="font-size:12px;color:var(--muted);margin-bottom:2px">🤖 Smart AI</div><div style="font-size:13px;font-weight:600">Understands plain English · matches by meaning</div></div>
+            <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px"><div style="font-size:12px;color:var(--muted);margin-bottom:2px">💰 Earn</div><div style="font-size:13px;font-weight:600">Sell APIs · you keep your price, +10% platform fee</div></div>
+          </div>
         </div>
       </div>
       <div>
-        <h2 style="font-size:18px;font-weight:700;margin-bottom:18px">FAQ</h2>
+        <h2 style="font-size:18px;font-weight:700;margin-bottom:18px">Frequently Asked Questions</h2>
         <div style="display:flex;flex-direction:column;gap:10px">
-          <div class="card" style="padding:14px;cursor:pointer" onclick="this.querySelector('.fa').style.display=this.querySelector('.fa').style.display==='none'?'block':'none'">
-            <div style="font-weight:600;font-size:13px">What is an interaction?</div>
-            <div class="fa" style="display:none;margin-top:8px;color:var(--muted);font-size:12px;line-height:1.6">Every time you record a workflow or run an API counts as 1 interaction.</div>
+          <div class="card faq-item" style="padding:14px;cursor:pointer" onclick="this.querySelector('.fa').style.display=this.querySelector('.fa').style.display==='none'?'block':'none'">
+            <div style="font-weight:600;font-size:13px">💬 Do I need to know coding?</div>
+            <div class="fa" style="display:none;margin-top:8px;color:var(--muted);font-size:12px;line-height:1.6">Not at all. You just do the task once in a browser like you normally would, then run it later by typing what you want in plain English.</div>
           </div>
-          <div class="card" style="padding:14px;cursor:pointer" onclick="this.querySelector('.fa').style.display=this.querySelector('.fa').style.display==='none'?'block':'none'">
-            <div style="font-weight:600;font-size:13px">What websites can I record?</div>
-            <div class="fa" style="display:none;margin-top:8px;color:var(--muted);font-size:12px;line-height:1.6">Any website — DSE, IMDB, booking sites, Google Forms, airline ticketing, and more.</div>
+          <div class="card faq-item" style="padding:14px;cursor:pointer" onclick="this.querySelector('.fa').style.display=this.querySelector('.fa').style.display==='none'?'block':'none'">
+            <div style="font-weight:600;font-size:13px">🌐 What websites can I record?</div>
+            <div class="fa" style="display:none;margin-top:8px;color:var(--muted);font-size:12px;line-height:1.6">Almost any — online shops (Daraz, Rokomari), Google Forms, flight search, job sites, and more. Sites behind heavy bot-protection (e.g. some airline meta-search) may be blocked.</div>
           </div>
-          <div class="card" style="padding:14px;cursor:pointer" onclick="this.querySelector('.fa').style.display=this.querySelector('.fa').style.display==='none'?'block':'none'">
-            <div style="font-weight:600;font-size:13px">How do I pay?</div>
-            <div class="fa" style="display:none;margin-top:8px;color:var(--muted);font-size:12px;line-height:1.6">Send money via bKash to <strong>01620888131</strong>. We verify and activate within hours.</div>
+          <div class="card faq-item" style="padding:14px;cursor:pointer" onclick="this.querySelector('.fa').style.display=this.querySelector('.fa').style.display==='none'?'block':'none'">
+            <div style="font-weight:600;font-size:13px">🎛️ What's a Variable vs a Constant?</div>
+            <div class="fa" style="display:none;margin-top:8px;color:var(--muted);font-size:12px;line-height:1.6">A <strong>Variable</strong> is a field the AI changes each run (the book you search, the flight route). A <strong>Constant</strong> stays the same every time and is never mentioned (your name, phone, email).</div>
           </div>
-          <div class="card" style="padding:14px;cursor:pointer" onclick="this.querySelector('.fa').style.display=this.querySelector('.fa').style.display==='none'?'block':'none'">
-            <div style="font-weight:600;font-size:13px">Can I sell my APIs?</div>
-            <div class="fa" style="display:none;margin-top:8px;color:var(--muted);font-size:12px;line-height:1.6">Yes! On paid plans, publish to the marketplace and set your own price.</div>
+          <div class="card faq-item" style="padding:14px;cursor:pointer" onclick="this.querySelector('.fa').style.display=this.querySelector('.fa').style.display==='none'?'block':'none'">
+            <div style="font-weight:600;font-size:13px">🔒 Is my login safe?</div>
+            <div class="fa" style="display:none;margin-top:8px;color:var(--muted);font-size:12px;line-height:1.6">Yes. Passwords are encrypted (AES-256-GCM) and never sent back to any user. Your Google/Facebook session is deliberately never captured. For login-required forms, "personal login" mode keeps your sign-in only on your own machine.</div>
+          </div>
+          <div class="card faq-item" style="padding:14px;cursor:pointer" onclick="this.querySelector('.fa').style.display=this.querySelector('.fa').style.display==='none'?'block':'none'">
+            <div style="font-weight:600;font-size:13px">📊 What is an "interaction"?</div>
+            <div class="fa" style="display:none;margin-top:8px;color:var(--muted);font-size:12px;line-height:1.6">Every time you record a workflow or run an API counts as 1 interaction. Your plan sets how many you get.</div>
+          </div>
+          <div class="card faq-item" style="padding:14px;cursor:pointer" onclick="this.querySelector('.fa').style.display=this.querySelector('.fa').style.display==='none'?'block':'none'">
+            <div style="font-weight:600;font-size:13px">🛍️ Can I sell my APIs?</div>
+            <div class="fa" style="display:none;margin-top:8px;color:var(--muted);font-size:12px;line-height:1.6">Yes! On a paid plan, publish to the marketplace and set your price. You receive what you set; buyers pay a 10% platform fee on top — shown transparently to both sides.</div>
+          </div>
+          <div class="card faq-item" style="padding:14px;cursor:pointer" onclick="this.querySelector('.fa').style.display=this.querySelector('.fa').style.display==='none'?'block':'none'">
+            <div style="font-weight:600;font-size:13px">💳 How do I pay / get paid?</div>
+            <div class="fa" style="display:none;margin-top:8px;color:var(--muted);font-size:12px;line-height:1.6">Payments use bKash Send Money to <strong>01620888131</strong>. Plans and purchases are activated after we confirm the payment.</div>
           </div>
         </div>
         <button class="btn btn-outline" style="width:100%;margin-top:16px" onclick="showPage('plans')">⬆️ Upgrade Plan</button>
